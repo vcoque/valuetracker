@@ -8,46 +8,78 @@ Every task clears the standing bar in `SPEC.md` §Boundaries before it counts as
 done: `npm run typecheck && npm test && npm run lint` passes, no `number` used
 for money, no skipped tests.
 
+**All `npm`/`npx` commands below run inside the toolchain container** (Task 1):
+prefix them with `./scripts/dev.sh`, e.g. `./scripts/dev.sh npm test`. Docker is
+the only thing the host needs.
+
 ---
 
 ## Phase 0: Foundation
 
-### - [ ] Task 1: Environment prerequisites
+### - [x] Task 1: Containerized toolchain
 
-**Description:** Bring the local toolchain up to what the stack requires. Two
-confirmed blockers: Node is `v18.19.1` and NestJS 12 declares `engines: node >= 20`;
-and although the Docker daemon (29.7.2) *is* running, this user is not in the
-`docker` group, so the socket is unreachable — which Testcontainers requires.
-
-> **STATUS: BLOCKED — needs the user.** The repo-side half is done; both
-> system-side fixes require privileges this session does not have.
+**Description:** Give the project the toolchain the stack requires without
+mutating the developer's machine. The host runs Node `v18.19.1` while NestJS 12
+declares `engines: node >= 20`. Rather than upgrade the host, the toolchain --
+Node 24.20.0, npm, and the build dependencies -- lives in an image defined by
+`Dockerfile`, wired up by `compose.yaml` alongside a Postgres service. Docker
+and Compose are now the only host requirements.
 
 **Acceptance criteria:**
-- [ ] `node --version` reports ≥ 20 LTS — **blocked**, currently `v18.19.1`, no version manager installed
-- [x] `.nvmrc` committed pinning the chosen version — pinned to `24.20.0`
-- [ ] `docker info` succeeds — **blocked**, daemon runs but the user is not in the `docker` group
+- [x] Docker daemon reachable and Compose v2+ present — 29.7.2 and v5.4.0
+- [x] The toolchain image reports Node ≥ 20 — reports 24.20.0, matching `.nvmrc`
+- [x] `libssl` present in the image — `node:*-slim` omits it and Prisma's query engine links it
+- [x] The container reaches the docker socket and `host.docker.internal`, so Testcontainers works
+- [x] A Postgres service comes up healthy and is reachable from the app container
+- [x] Files written into the bind mount are owned by the developer, not by root
+- [x] `.nvmrc` retained, now documenting optional host-native work only
 
 **Verification:**
-- [ ] `./scripts/check-env.sh` exits 0 — currently exits 1, correctly reporting both failures
+- [x] `./scripts/check-env.sh` exits 0
+- [x] `./scripts/check-env.sh --full` exits 0 — builds the image and checks node, libssl and the socket
+- [x] Testcontainers started a sibling Postgres 17.11 from inside the app container and ran a query
+- [x] `./scripts/dev.sh node --version` → `v24.20.0`; a TCP probe reached `db:5432`
 
-**Unblocking (user must run):**
-```bash
-# 1. Node 24 LTS — install a version manager, then the pinned version
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
-exec "$SHELL" && nvm install && nvm use     # reads .nvmrc
+**Decisions taken here:**
 
-# 2. Docker socket access (requires a new login session to take effect)
-sudo usermod -aG docker "$USER"
-```
+*Docker-outside-of-Docker for Testcontainers.* The test suite runs inside a
+container but Testcontainers must start databases. Sharing the host's docker
+socket makes those databases **siblings** of the app container rather than
+children -- lighter and faster than privileged Docker-in-Docker, and it reuses
+the host's image cache. Siblings publish their ports on the host, not in the
+app container's network namespace, hence `host.docker.internal` via
+`extra_hosts: host-gateway` and `TESTCONTAINERS_HOST_OVERRIDE`. Proven working,
+not assumed.
 
-**Note on the pin:** the task originally said "≥ 20 LTS". Node 20 "Iron" last
-shipped 2026-03-24 and is end-of-life; Node 24 "Krypton" is the current LTS
-line (v24.20.0, released 2026-08-26). `.nvmrc` pins 24.20.0; `check-env.sh`
-still enforces a floor of major 20 so the gate is not stricter than the spec.
+*`node_modules` stays in the bind mount* rather than an anonymous volume. Host
+and container are both linux/amd64 and the host's glibc (2.39) is newer than the
+image's (2.36), so packages installed in the container remain readable from the
+host -- which keeps the editor's TypeScript server and ESLint working without a
+second host-native install. The usual reason to hide `node_modules` (macOS bind
+mount performance, cross-platform binaries) does not apply here.
+
+*`build.network: host`.* BuildKit copies the host `/etc/resolv.conf` into the
+build's own network namespace verbatim. This host runs systemd-resolved, so that
+file names the `127.0.0.53` stub, which is meaningless inside that namespace, and
+every `apt-get` lookup failed to resolve. `dockerd` rewrites it for runtime
+containers but BuildKit does not. Sharing the host namespace at build time only
+is the repo-local fix; it needs no root and does not affect runtime networking.
+
+*Dev-database credentials are committed in `compose.yaml` on purpose.* They are
+identical for every developer and reachable only from the local Compose network.
+Nothing deployed reads them; deployed credentials come from the environment.
+This is not a breach of `SPEC.md` §Boundaries "never commit secrets".
+
+**Superseded:** the original task required Node ≥ 20 *on the host* and listed
+`nvm` install steps. Nothing runs on the host now, so `check-env.sh` reports the
+host Node version as information rather than failing on it. `.nvmrc` is kept for
+anyone who chooses to work host-natively.
 
 **Dependencies:** None
-**Files:** `.nvmrc`, `.gitignore`, `scripts/check-env.sh`
-**Scope:** XS
+**Files:** `Dockerfile`, `compose.yaml`, `.dockerignore`, `.env.example`,
+`.nvmrc`, `.gitignore`, `scripts/check-env.sh`, `scripts/dev.sh`,
+`scripts/_docker.sh`
+**Scope:** S
 
 ---
 

@@ -47,6 +47,7 @@ Recorded so they can be challenged rather than discovered later:
 | Framework | NestJS on the Fastify adapter | **12.0.1** | Its module system maps 1:1 onto the capability map; DI keeps the cost-basis engine testable with zero I/O |
 | Scheduling | `@nestjs/schedule` | **12.0.1** | Cron for `market-data` ingestion and the `valuation` snapshot job |
 | ORM / migrations | Prisma | **7.10.0** | `Decimal` is decimal.js-backed and maps to Postgres `NUMERIC`; schema-as-source-of-truth with generated types |
+| Toolchain host | Docker Engine + Compose v2 | **any current** | The only host dependency; Node and the build tools live in the image |
 | Database | PostgreSQL | **16+** | `NUMERIC` for exact money, range partitioning for the time-series tables, partial indexes |
 | Decimal math | `decimal.js` | **10.6.0** | Bundled with Prisma; used directly in pure domain code |
 | Validation | `zod` | **4.5.4** | Runtime validation at the HTTP boundary, inferred into TS types |
@@ -85,6 +86,14 @@ size for this system).
 
 ```
 Install:      npm ci
+All commands run inside the toolchain container -- `./scripts/dev.sh <cmd>`
+wraps `docker compose`. Nothing but Docker is required on the host.
+
+Setup:        ./scripts/check-env.sh --init-env   # write the Compose .env
+              ./scripts/check-env.sh --full       # verify the toolchain
+              docker compose up -d                # database + toolchain
+              ./scripts/dev.sh npm ci
+
 Dev:          npm run start:dev            # watch mode, port 3000
 Build:        npm run build                # tsc -> dist/
 Start:        npm run start:prod           # node dist/main
@@ -105,8 +114,15 @@ DB reset:     npx prisma migrate reset                    # destructive, local o
 DB studio:    npx prisma studio
 ```
 
-Integration and E2E tests start a real PostgreSQL via Testcontainers and require
-a running Docker daemon.
+Integration and E2E tests start a real PostgreSQL via Testcontainers. Because
+the suite itself runs inside a container, `compose.yaml` shares the host's
+docker socket: the databases Testcontainers creates are *siblings* of the app
+container, not children. They publish their ports on the host, so
+`TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal` tells the client where to
+dial. This is verified by `./scripts/check-env.sh --full`.
+
+The `db` service in `compose.yaml` is for the development loop and migrations
+only -- tests never use it, so a test run cannot corrupt development data.
 
 ---
 
@@ -282,7 +298,7 @@ real money, and it is the cheapest code in the system to test exhaustively.
 
 Project-level. Module-level criteria live in each module spec.
 
-- [ ] `npm ci && npm run build && npm test` passes from a clean checkout on Node 20+.
+- [ ] `./scripts/dev.sh npm ci && ./scripts/dev.sh npm run build && ./scripts/dev.sh npm test` passes from a clean checkout, with Docker as the only host dependency.
 - [ ] `npx prisma migrate deploy` builds the full schema of `ARCHITECTURE.md` §7 on an empty database.
 - [ ] Every entity in `ARCHITECTURE.md` §7 has a Prisma model whose field names map to the documented columns.
 - [ ] The walking skeleton runs end to end: register → authenticate → create a portfolio → add an instrument → read it back scoped to that user.

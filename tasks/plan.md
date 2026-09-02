@@ -23,6 +23,10 @@ Carried from [`SPEC.md`](../SPEC.md); repeated here only where they shape task o
   inheritance, so the `instrument` hierarchy is four 1:1 relations plus a
   database `CHECK` constraint that Prisma cannot express. That constraint lives
   in a hand-edited migration.
+- **The toolchain is containerized, the host is not touched.** `Dockerfile` and
+  `compose.yaml` pin Node 24.20.0 and a Postgres 17 dev database. Docker is the
+  only host dependency, which makes the environment reproducible and removes any
+  host Node upgrade from the critical path.
 - **Testcontainers over a mocked Prisma.** The invariants that matter — composite
   primary keys, partial unique indexes, `NUMERIC` rounding, the specialization
   `CHECK` — only hold in a real PostgreSQL. Mocking the ORM would test nothing.
@@ -36,7 +40,7 @@ Carried from [`SPEC.md`](../SPEC.md); repeated here only where they shape task o
 ## Dependency Graph
 
 ```
-environment (Node 20, Docker daemon)
+containerized toolchain (Docker + Compose; Node 24 in the image)
     │
     └── NestJS scaffold ── quality gates (lint, 3 Jest projects)
             │
@@ -93,8 +97,9 @@ See [`tasks/todo.md`](./todo.md) for the full task detail. Summary:
 | Risk | Impact | Mitigation |
 |---|---|---|
 | Prisma cannot express the class-table inheritance cleanly | **High** — invalidates the ORM choice and reshapes `catalog` | Task 5 spike proves it before any real schema is written. Fallback: raw-SQL migrations with hand-written mappers, or reassess Drizzle. Decide at Checkpoint A, not Phase 3. |
-| Node 18 → 20 upgrade disrupts the developer's other local work | Medium — blocks all work until resolved | Use `nvm`/`volta` with a committed `.nvmrc`; never a system-wide replacement |
-| Docker daemon unavailable (currently not running) | Medium — all integration and E2E tests fail | Task 1 verifies it. Fallback: a `docker-compose.yml` Postgres with `DATABASE_URL`, at the cost of test isolation |
+| ~~Node 18 → 20 upgrade disrupts the developer's other local work~~ | — | **Resolved in Task 1.** The host is not upgraded at all; the toolchain runs in a container, so the host Node version is irrelevant |
+| Docker unavailable or unreachable | **High** — Docker is now the single host dependency; without it nothing builds or tests | `./scripts/check-env.sh` diagnoses the specific cause (daemon down, missing group, stale shell). No fallback is offered: a host-native path would reintroduce the Node 18 problem the container solves |
+| Testcontainers cannot reach its sibling databases from inside the container | Medium — every integration and E2E test fails | Resolved in Task 1 via a shared docker socket plus `TESTCONTAINERS_HOST_OVERRIDE`; `check-env.sh --full` re-proves it on every machine |
 | TypeScript 6.0.3 misbehaves with NestJS decorator metadata | Medium — toolchain churn | Verified `ts-jest@29.4.12` accepts `<7`. If 6.x misbehaves, drop to `5.9.3`; do **not** go to 7.x, which ts-jest rejects outright |
 | `argon2` native module fails to build on the target platform | Low | `bcrypt` (cost ≥ 12) fallback already sanctioned in `SPEC-identity.md` |
 | Partial unique indexes for public-only instrument uniqueness are easy to get subtly wrong | Medium — silent data corruption in `catalog` | Task 13 requires an integration test that proves two users may hold same-named private instruments while public duplicates are rejected |
