@@ -18,16 +18,34 @@ for money, no skipped tests.
 confirmed blockers: Node is `v18.19.1` and NestJS 12 declares `engines: node >= 20`;
 Docker is installed (29.7.2) but the daemon is not running, which Testcontainers requires.
 
+> **STATUS: BLOCKED — needs the user.** The repo-side half is done; both
+> system-side fixes require privileges this session does not have.
+
 **Acceptance criteria:**
-- [ ] `node --version` reports ≥ 20 LTS
-- [ ] `.nvmrc` committed pinning the chosen version
-- [ ] `docker info` succeeds
+- [ ] `node --version` reports ≥ 20 LTS — **blocked**, currently `v18.19.1`, no version manager installed
+- [x] `.nvmrc` committed pinning the chosen version — pinned to `24.20.0`
+- [ ] `docker info` succeeds — **blocked**, daemon runs but the user is not in the `docker` group
 
 **Verification:**
-- [ ] `node --version && docker info >/dev/null && echo ok`
+- [ ] `./scripts/check-env.sh` exits 0 — currently exits 1, correctly reporting both failures
+
+**Unblocking (user must run):**
+```bash
+# 1. Node 24 LTS — install a version manager, then the pinned version
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+exec "$SHELL" && nvm install && nvm use     # reads .nvmrc
+
+# 2. Docker socket access (requires a new login session to take effect)
+sudo usermod -aG docker "$USER"
+```
+
+**Note on the pin:** the task originally said "≥ 20 LTS". Node 20 "Iron" last
+shipped 2026-03-24 and is end-of-life; Node 24 "Krypton" is the current LTS
+line (v24.20.0, released 2026-08-26). `.nvmrc` pins 24.20.0; `check-env.sh`
+still enforces a floor of major 20 so the gate is not stricter than the spec.
 
 **Dependencies:** None
-**Files:** `.nvmrc`
+**Files:** `.nvmrc`, `.gitignore`, `scripts/check-env.sh`
 **Scope:** XS
 
 ---
