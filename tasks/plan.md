@@ -23,10 +23,14 @@ Carried from [`SPEC.md`](../SPEC.md); repeated here only where they shape task o
   inheritance, so the `instrument` hierarchy is four 1:1 relations plus a
   database `CHECK` constraint that Prisma cannot express. That constraint lives
   in a hand-edited migration.
-- **The toolchain is containerized, the host is not touched.** `Dockerfile` and
-  `compose.yaml` pin Node 24.20.0 and a Postgres 17 dev database. Docker is the
-  only host dependency, which makes the environment reproducible and removes any
-  host Node upgrade from the critical path.
+- **The toolchain is containerized, the host is not touched.** `Dockerfile.dev`
+  and `compose-dev.yaml` pin Node 24.20.0 and a Postgres 17 dev database. Docker
+  is the only host dependency, which makes the environment reproducible and
+  removes any host Node upgrade from the critical path.
+- **Every environment is named explicitly.** No file relies on Compose's
+  implicit discovery of `compose.yaml`/`.env`, and no interpolation carries a
+  silent default. Adding CI or production means adding files for them, never
+  overloading the development ones.
 - **Testcontainers over a mocked Prisma.** The invariants that matter — composite
   primary keys, partial unique indexes, `NUMERIC` rounding, the specialization
   `CHECK` — only hold in a real PostgreSQL. Mocking the ORM would test nothing.

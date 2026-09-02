@@ -1,8 +1,14 @@
-# Development and test toolchain for ValueTracker.
+# ValueTracker DEVELOPMENT and TEST toolchain.
 #
-# The host needs only Docker: Node, npm and the build tools all live in here.
-# The version is pinned to match .nvmrc -- keep the two in step.
-FROM node:24.20.0-bookworm-slim
+# Named .dev because it is exactly that: it carries git, test tooling and a
+# writable bind mount, and it is not a deployment artifact. A production image
+# will be a separate, smaller Dockerfile built from the compiled output.
+#
+# The base image is passed in rather than hardcoded, so the version lives in
+# .env.dev next to every other environment-specific value. It must stay in step
+# with .nvmrc.
+ARG NODE_IMAGE
+FROM ${NODE_IMAGE}
 
 # openssl  -- Prisma's query engine links libssl, and node:*-slim ships without
 #             it. Omitting this fails at runtime, not at build time.
@@ -16,7 +22,7 @@ RUN apt-get update \
 WORKDIR /workspace
 
 # Nothing project-specific is baked in: the repo is bind-mounted at run time
-# (see compose.yaml), so this image is pure toolchain and its layers stay
+# (see compose-dev.yaml), so this image is pure toolchain and its layers stay
 # cached across every dependency change.
 USER node
 CMD ["sleep", "infinity"]

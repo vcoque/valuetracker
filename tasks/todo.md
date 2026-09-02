@@ -22,8 +22,8 @@ the only thing the host needs.
 mutating the developer's machine. The host runs Node `v18.19.1` while NestJS 12
 declares `engines: node >= 20`. Rather than upgrade the host, the toolchain --
 Node 24.20.0, npm, and the build dependencies -- lives in an image defined by
-`Dockerfile`, wired up by `compose.yaml` alongside a Postgres service. Docker
-and Compose are now the only host requirements.
+`Dockerfile.dev`, wired up by `compose-dev.yaml` alongside a Postgres service.
+Docker and Compose are now the only host requirements.
 
 **Acceptance criteria:**
 - [x] Docker daemon reachable and Compose v2+ present — 29.7.2 and v5.4.0
@@ -33,12 +33,16 @@ and Compose are now the only host requirements.
 - [x] A Postgres service comes up healthy and is reachable from the app container
 - [x] Files written into the bind mount are owned by the developer, not by root
 - [x] `.nvmrc` retained, now documenting optional host-native work only
+- [x] Every environment-specific file names its environment; nothing is loaded by implicit discovery
+- [x] No interpolation carries a silent default -- a missing value fails and names its fix
 
 **Verification:**
 - [x] `./scripts/check-env.sh` exits 0
 - [x] `./scripts/check-env.sh --full` exits 0 — builds the image and checks node, libssl and the socket
 - [x] Testcontainers started a sibling Postgres 17.11 from inside the app container and ran a query
 - [x] `./scripts/dev.sh node --version` → `v24.20.0`; a TCP probe reached `db:5432`
+- [x] A bare `docker compose up` errors with "no configuration file provided" — the implicit path is gone
+- [x] Omitting `.env.dev.local` errors with `required variable DOCKER_GID is missing a value: run ./scripts/check-env.sh --init-env`
 
 **Decisions taken here:**
 
@@ -65,10 +69,28 @@ every `apt-get` lookup failed to resolve. `dockerd` rewrites it for runtime
 containers but BuildKit does not. Sharing the host namespace at build time only
 is the repo-local fix; it needs no root and does not affect runtime networking.
 
-*Dev-database credentials are committed in `compose.yaml` on purpose.* They are
+*Environments are named, never implicit.* Compose loads `compose.yaml` and
+`.env` from the working directory by default, so a bare `docker compose up`
+would silently have meant "development". The files are named for what they
+configure -- `compose-dev.yaml`, `Dockerfile.dev`, `.env.dev`,
+`.env.dev.local` -- and passed explicitly on every invocation.
+`scripts/_docker.sh` is the one place those names are written down. Adding CI or
+production means adding files for them, never overloading these.
+
+*Shared dev configuration is committed; only per-machine values are not.*
+`.env.dev` holds the image pins, database name, credentials and published ports,
+so a fresh clone is runnable and two developers cannot silently diverge.
+`.env.dev.local` holds `HOST_UID`, `HOST_GID` and `DOCKER_GID` alone, because
+those genuinely differ per machine. `.gitignore` was corrected: its previous
+`.env.*` rule would have swallowed `.env.dev`.
+
+*Dev-database credentials are committed in `.env.dev` on purpose.* They are
 identical for every developer and reachable only from the local Compose network.
-Nothing deployed reads them; deployed credentials come from the environment.
-This is not a breach of `SPEC.md` §Boundaries "never commit secrets".
+Nothing deployed reads them; deployed credentials come from the platform. This
+is not a breach of `SPEC.md` §Boundaries "never commit secrets".
+
+*`DATABASE_URL` is assembled in `compose-dev.yaml` from the same variables the
+database is created with,* rather than stored whole, so the two cannot drift.
 
 **Superseded:** the original task required Node ≥ 20 *on the host* and listed
 `nvm` install steps. Nothing runs on the host now, so `check-env.sh` reports the
@@ -76,9 +98,9 @@ host Node version as information rather than failing on it. `.nvmrc` is kept for
 anyone who chooses to work host-natively.
 
 **Dependencies:** None
-**Files:** `Dockerfile`, `compose.yaml`, `.dockerignore`, `.env.example`,
-`.nvmrc`, `.gitignore`, `scripts/check-env.sh`, `scripts/dev.sh`,
-`scripts/_docker.sh`
+**Files:** `Dockerfile.dev`, `compose-dev.yaml`, `.dockerignore`, `.env.dev`,
+`.env.dev.local.example`, `.nvmrc`, `.gitignore`, `scripts/check-env.sh`,
+`scripts/dev.sh`, `scripts/_docker.sh`
 **Scope:** S
 
 ---

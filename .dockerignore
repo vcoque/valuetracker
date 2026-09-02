@@ -3,4 +3,6 @@ node_modules
 dist
 coverage
 *.log
+# Per-machine and secret-bearing env files never enter a build context.
 .env
+.env.*.local

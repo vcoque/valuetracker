@@ -89,9 +89,8 @@ Install:      npm ci
 All commands run inside the toolchain container -- `./scripts/dev.sh <cmd>`
 wraps `docker compose`. Nothing but Docker is required on the host.
 
-Setup:        ./scripts/check-env.sh --init-env   # write the Compose .env
+Setup:        ./scripts/check-env.sh --init-env   # per-machine .env.dev.local
               ./scripts/check-env.sh --full       # verify the toolchain
-              docker compose up -d                # database + toolchain
               ./scripts/dev.sh npm ci
 
 Dev:          npm run start:dev            # watch mode, port 3000
@@ -118,11 +117,34 @@ Integration and E2E tests start a real PostgreSQL via Testcontainers. Because
 the suite itself runs inside a container, `compose.yaml` shares the host's
 docker socket: the databases Testcontainers creates are *siblings* of the app
 container, not children. They publish their ports on the host, so
-`TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal` tells the client where to
-dial. This is verified by `./scripts/check-env.sh --full`.
+`TESTCONTAINERS_HOST_OVERRIDE` tells the client where to dial. This is verified
+by `./scripts/check-env.sh --full`.
 
-The `db` service in `compose.yaml` is for the development loop and migrations
-only -- tests never use it, so a test run cannot corrupt development data.
+The `db` service in `compose-dev.yaml` is for the development loop and
+migrations only -- tests never use it, so a test run cannot corrupt development
+data.
+
+### Environments are named, never implicit
+
+Compose loads `compose.yaml` and `.env` from the working directory by default,
+which would make a bare `docker compose up` silently mean "development". Files
+are therefore named for the environment they configure and passed explicitly:
+
+| File | Committed | Contents |
+|---|---|---|
+| `compose-dev.yaml` | yes | Development orchestration |
+| `Dockerfile.dev` | yes | Development/test toolchain image (not a deployment artifact) |
+| `.env.dev` | **yes** | Shared, non-secret development configuration |
+| `.env.dev.local` | no | Per-machine values only: `HOST_UID`, `HOST_GID`, `DOCKER_GID` |
+| `.env.dev.local.example` | yes | Template for the above |
+
+`scripts/_docker.sh` is the single place those names are written down. Every
+interpolation in `compose-dev.yaml` uses `${VAR:?message}` rather than a
+`:-default`, so a missing value fails loudly and names its own fix instead of
+substituting something that happens to work on one machine.
+
+A further environment (`compose-ci.yaml`, `.env.ci`, a production `Dockerfile`)
+is added by the same rule; nothing is ever added to the dev files to serve it.
 
 ---
 

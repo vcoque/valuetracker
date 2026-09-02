@@ -33,3 +33,33 @@ vt_docker() {
 # True when the current shell needs the sg fallback -- worth telling the user,
 # since it means their group fix is applied but not yet active.
 vt_docker_group_is_stale() { ! id -Gn | grep -qw docker; }
+
+# --- Explicit addressing of the development environment ----------------------
+#
+# Compose would implicitly load compose.yaml and .env from the working
+# directory, which makes `docker compose up` silently mean "development". The
+# files are therefore named for their environment and passed explicitly on every
+# invocation. These four names are the single definition of that wiring; nothing
+# else in the repo should spell them out.
+
+VT_ENVIRONMENT="dev"
+VT_COMPOSE_FILE="compose-${VT_ENVIRONMENT}.yaml"
+VT_ENV_SHARED=".env.${VT_ENVIRONMENT}"          # committed, shared, non-secret
+VT_ENV_LOCAL=".env.${VT_ENVIRONMENT}.local"     # gitignored, per-machine
+
+# Run `docker compose <args>` against the development environment.
+vt_compose() {
+  vt_docker compose \
+    --file "$VT_COMPOSE_FILE" \
+    --env-file "$VT_ENV_SHARED" \
+    --env-file "$VT_ENV_LOCAL" \
+    "$@"
+}
+
+# Every file vt_compose needs before it can run at all.
+vt_compose_files_present() {
+  local f
+  for f in "$VT_COMPOSE_FILE" "$VT_ENV_SHARED" "$VT_ENV_LOCAL" Dockerfile.dev; do
+    [ -f "$f" ] || return 1
+  done
+}

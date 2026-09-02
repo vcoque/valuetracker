@@ -6,9 +6,12 @@ dist/
 *.tsbuildinfo
 
 # environment
+# Environment files are named for the environment they configure. Shared,
+# non-secret configuration (.env.dev) is committed so a clone is runnable;
+# only per-machine and secret-bearing overrides are ignored.
 .env
-.env.*
-!.env.example
+.env.*.local
+!.env.*.local.example
 
 # test / coverage
 coverage/
