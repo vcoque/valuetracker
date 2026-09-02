@@ -16,7 +16,8 @@ for money, no skipped tests.
 
 **Description:** Bring the local toolchain up to what the stack requires. Two
 confirmed blockers: Node is `v18.19.1` and NestJS 12 declares `engines: node >= 20`;
-Docker is installed (29.7.2) but the daemon is not running, which Testcontainers requires.
+and although the Docker daemon (29.7.2) *is* running, this user is not in the
+`docker` group, so the socket is unreachable — which Testcontainers requires.
 
 > **STATUS: BLOCKED — needs the user.** The repo-side half is done; both
 > system-side fixes require privileges this session does not have.
