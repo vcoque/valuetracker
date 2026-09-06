@@ -31,10 +31,14 @@ Recorded so they can be challenged rather than discovered later:
 1. Brazilian market focus — B3, CDI/IPCA/SELIC indices, BRL as the common base
    currency. Multi-currency is supported, but BRL is the default.
 2. One owner per portfolio. No sharing, no advisor/client roles.
-3. Web application. No native mobile client.
+3. Three clients, built in this order: HTTP API, then a web frontend, then a
+   **native Android** application. iOS is not planned. A WebView shell was
+   considered and rejected — see
+   [ADR 0002](./docs/adr/0002-native-android-app-not-webview.md).
 4. Personal tracking only — nothing here is a regulated financial product.
-5. Backend-first. The HTTP API is the deliverable; a UI is a later, separate
-   concern.
+5. Backend-first. The HTTP API is the deliverable for the walking skeleton; the
+   web and Android clients are later, separate efforts against the same
+   contract.
 
 ---
 
@@ -150,40 +154,69 @@ is added by the same rule; nothing is ever added to the dev files to serve it.
 
 ## Project Structure
 
+A monorepo on npm workspaces — see
+[`docs/adr/0001-monorepo-with-npm-workspaces.md`](./docs/adr/0001-monorepo-with-npm-workspaces.md).
+
 ```
-src/
-  main.ts                     Bootstrap, Fastify adapter, global pipes
-  app.module.ts               Root module; imports one module per capability
-  modules/
-    identity/                 One directory per capability-map module id
-      identity.module.ts
-      identity.controller.ts
-      identity.service.ts
-      dto/                    zod schemas + inferred types
-      domain/                 Pure logic, no I/O, no framework imports
-      *.spec.ts               Unit tests, colocated with their subject
-      *.int-spec.ts           Integration tests, real Postgres
-    catalog/
-    portfolio/
-    ledger/                   Not yet built
-    market-data/              Not yet built
-    valuation/                Not yet built
-    reporting/                Not yet built
-  shared/
-    prisma/                   PrismaService, transaction helpers
-    money/                    Money and Quantity value objects over Decimal
-    config/                   Typed, zod-validated env configuration
-    http/                     Filters, interceptors, zod validation pipe
-prisma/
-  schema.prisma               Single schema; entities per ARCHITECTURE.md §7
-  migrations/                 Generated, committed, never hand-edited
-  seed.ts                     Currencies, exchanges, reference data
-test/
-  e2e/                        *.e2e-spec.ts, full HTTP through a real database
-  fixtures/                   Shared builders and factories
+apps/
+  api/                          NestJS + Prisma. The only workspace in the
+    src/                        walking-skeleton plan.
+      main.ts                   Bootstrap, Fastify adapter, global pipes
+      app.module.ts             Root module; imports one module per capability
+      modules/
+        identity/               One directory per capability-map module id
+          identity.module.ts
+          identity.controller.ts
+          identity.service.ts
+          dto/                  Request/response shapes, from @valuetracker/contract
+          domain/               Pure logic, no I/O, no framework imports
+          *.spec.ts             Unit tests, colocated with their subject
+          *.int-spec.ts         Integration tests, real Postgres
+        catalog/
+        portfolio/
+        ledger/                 Not yet built
+        market-data/            Not yet built
+        valuation/              Not yet built
+        reporting/              Not yet built
+      shared/
+        prisma/                 PrismaService, transaction helpers
+        money/                  Money and Quantity value objects over Decimal
+        config/                 Typed, zod-validated env configuration
+        http/                   Filters, interceptors, zod validation pipe
+    prisma/
+      schema.prisma             Single schema; entities per each SPEC-*.md
+      migrations/               Generated, committed, never hand-edited
+      seed.ts                   Currencies, exchanges, reference data
+    test/
+      e2e/                      *.e2e-spec.ts, full HTTP through a real database
+      fixtures/                 Shared builders and factories
+
+  web/                          Web frontend. Not yet specified.
+  mobile/                       Native Android. Created when that work starts.
+
+packages/
+  contract/                     zod schemas + inferred types. The API validates
+                                with these; every client infers from them. One
+                                definition, never a copy.
+
 docs/
-  adr/                        Architecture decision records
+  adr/                          Architecture decision records
+tasks/                          plan.md and todo.md
 ```
+
+**Workspace boundary rule.** `apps/*` may depend on `packages/*`. No app depends
+on another app, and no package depends on an app. `packages/contract` imports
+nothing from the API — it is schemas and types only, so a client can consume it
+without pulling in NestJS or Prisma.
+
+**Money never crosses the wire as a number.** Monetary and quantity values are
+serialised as decimal strings, already aggregated and already converted to the
+portfolio's base currency. Clients format; clients do not compute. See
+`SPEC-reporting.md`.
+
+**Mobile does not run in the container toolchain.** Metro and an Android
+emulator are host-native. `.nvmrc` exists for that case; every other workspace
+runs through `./scripts/dev.sh`.
 
 **Module boundary rule.** A module imports another module's *public service*, and
 nothing else. Reaching into another module's `domain/`, `dto/` or Prisma models
@@ -209,7 +242,7 @@ export class PortfolioService {
 
   /**
    * Base currency is immutable after creation: changing it would invalidate
-   * every stored snapshot (ARCHITECTURE.md §5.1).
+   * every stored snapshot (`SPEC-valuation.md`).
    */
   async create(userId: string, input: CreatePortfolioInput): Promise<Portfolio> {
     return this.prisma.portfolio.create({
@@ -274,9 +307,9 @@ real money, and it is the cheapest code in the system to test exhaustively.
 - Every monetary calculation is tested against a hand-computed expected value
   written as a string literal (`'39.398667'`), never one produced by the code
   under test.
-- The worked examples in `ARCHITECTURE.md` §9 are ported verbatim into the
+- The worked examples in `SPEC-ledger.md` are ported verbatim into the
   `ledger` test suite as executable specifications.
-- Constraints declared in `ARCHITECTURE.md` §8.6 get an integration test each
+- The structural invariants declared in each module spec get an integration test each
   that proves the *database* rejects the violation — not merely that the service
   refuses to attempt it.
 - Bug fixes start with a failing test that reproduces the bug.
@@ -292,7 +325,8 @@ real money, and it is the cheapest code in the system to test exhaustively.
 - Run `npm run typecheck && npm test && npm run lint` before any commit.
 - Use exact decimal types for money and quantities.
 - Scope every user-owned query by `userId` in the `where` clause.
-- Update `ARCHITECTURE.md` *before* changing `schema.prisma`, and keep the two in step.
+- Update the owning `SPEC-*.md` *before* changing `schema.prisma`, and keep the two in step.
+- Update `ARCHITECTURE.md` too when a change adds, removes or re-links an entity — it holds the complete ER diagram.
 - Write an ADR in `docs/adr/` for any decision that contradicts this spec.
 - Keep migrations forward-only and reversible in effect.
 
@@ -309,7 +343,7 @@ real money, and it is the cheapest code in the system to test exhaustively.
 - Use `number` or `parseFloat` for a monetary or quantity value.
 - Hand-edit a generated migration after it has been applied anywhere.
 - Delete or `.skip` a failing test to reach green.
-- Convert a historical amount using today's FX rate (`ARCHITECTURE.md` §8.3).
+- Convert a historical amount using today's FX rate (`ARCHITECTURE.md` §6.1).
 - Write to snapshot tables from anywhere but the `valuation` job — they are
   derived, and nothing else may treat them as authoritative.
 - Store a plaintext or reversibly-encrypted password.
@@ -321,8 +355,8 @@ real money, and it is the cheapest code in the system to test exhaustively.
 Project-level. Module-level criteria live in each module spec.
 
 - [ ] `./scripts/dev.sh npm ci && ./scripts/dev.sh npm run build && ./scripts/dev.sh npm test` passes from a clean checkout, with Docker as the only host dependency.
-- [ ] `npx prisma migrate deploy` builds the full schema of `ARCHITECTURE.md` §7 on an empty database.
-- [ ] Every entity in `ARCHITECTURE.md` §7 has a Prisma model whose field names map to the documented columns.
+- [ ] `npx prisma migrate deploy` builds the full schema described across the `SPEC-*.md` files on an empty database.
+- [ ] Every entity in `ARCHITECTURE.md` §7's ownership index has a Prisma model whose field names map to the columns its owning spec documents.
 - [ ] The walking skeleton runs end to end: register → authenticate → create a portfolio → add an instrument → read it back scoped to that user.
 - [ ] A second user cannot read, modify or discover the first user's portfolio; proven by an E2E test, not by inspection.
 - [ ] CI enforces typecheck, lint, unit, integration and coverage gates on every push.
@@ -336,8 +370,9 @@ Unresolved, needing a decision before the module each one blocks:
 | # | Question | Blocks | Notes |
 |---|---|---|---|
 | 1 | Which market-data provider, and what are its rate limits and licensing terms? | `market-data` | B3 has no free official EOD feed; crypto and FX are easier. Licensing may constrain redistribution. |
-| 2 | Which index series supplies CDI/IPCA/SELIC for fixed-income accrual? | `valuation` | Fixed income is accrued, not marked to market (§8.4) — this is a hard dependency, not a nice-to-have. |
-| 3 | Session strategy: cookie sessions or JWT? | `identity` | Cookie sessions are simpler to revoke; JWT is easier if a mobile client ever appears. Assumption 3 says web-only, which favours cookies. |
-| 4 | Is self-service registration open, or invite/single-user? | `identity` | Changes whether email verification and rate limiting are in the first slice. |
-| 5 | Cash accounts — confirmed out of scope for v1? | `valuation`, `reporting` | Without them, true IRR is not computable and TWR is approximate (`ARCHITECTURE.md` §11). Worth confirming before reporting is promised. |
-| 6 | Deployment target and CI provider? | Shipping | Shapes the CI config and the migration-on-deploy story. |
+| 2 | Which index series supplies CDI/IPCA/SELIC for fixed-income accrual? | `valuation` | Fixed income is accrued, not marked to market (`SPEC-valuation.md`) — this is a hard dependency, not a nice-to-have. |
+| ~~3~~ | ~~Session strategy~~ | — | **Resolved.** JWT access tokens with server-side refresh sessions — [ADR 0003](./docs/adr/0003-jwt-access-tokens-with-refresh-sessions.md). Assumption 3 (web-only) is withdrawn: a native Android client is planned. |
+| ~~4~~ | ~~Registration model~~ | — | **Resolved.** Open self-service signup, email + password, multi-user from the start. Email verification deferred; rate limiting is not — [ADR 0003](./docs/adr/0003-jwt-access-tokens-with-refresh-sessions.md). |
+| 5 | Cash accounts — confirmed out of scope for v1? | `valuation`, `reporting` | Without them, true IRR is not computable and TWR is approximate (`ARCHITECTURE.md` §9). Worth confirming before reporting is promised. |
+| ~~6~~ | ~~CI provider~~ | — | **Resolved.** GitHub Actions. Deployment target still open, but it does not block the walking skeleton. |
+| 7 | Which frontend framework for `apps/web`, and which native toolchain for `apps/mobile`? | `web`, `mobile` | Neither blocks the backend. Build order is backend → web → Android. |

@@ -105,24 +105,35 @@ anyone who chooses to work host-natively.
 
 ---
 
-### - [ ] Task 2: NestJS scaffold with pinned versions
+### - [ ] Task 2: Workspace root and NestJS scaffold in `apps/api`
 
-**Description:** Create the NestJS application on the Fastify adapter with the
-exact versions from `SPEC.md` §Tech Stack. The pins are not preferences — `@latest`
-resolves to a Prisma RC and to a TypeScript that `ts-jest` rejects.
+**Description:** Establish the npm-workspaces root, then create the NestJS
+application inside `apps/api` on the Fastify adapter with the exact versions from
+`SPEC.md` §Tech Stack. The pins are not preferences — `@latest` resolves to a
+Prisma RC and to a TypeScript that `ts-jest` rejects.
+
+The layout is fixed here rather than later on purpose: moving the app afterwards
+touches every path in `SPEC.md`, all three Jest projects, the `tsconfig` paths
+and the container working directory. See
+[ADR 0001](../docs/adr/0001-monorepo-with-npm-workspaces.md).
 
 **Acceptance criteria:**
+- [ ] Root `package.json` declares `workspaces: ["apps/*", "packages/*"]` and is `private: true`
+- [ ] The NestJS app lives in `apps/api`; nothing application-level sits at the repository root
 - [ ] `prisma` and `@prisma/client` both pinned to exactly `7.10.0` (not `^`, not `latest`)
 - [ ] `typescript` pinned to `6.0.3`; TS 7.x must not appear in the lockfile
 - [ ] `tsconfig.json` has `strict: true`, `emitDecoratorMetadata`, `experimentalDecorators`
+- [ ] One lockfile at the root — a lockfile inside a workspace means the root was bypassed
 - [ ] App boots on Fastify and answers `GET /health` with 200
 
 **Verification:**
-- [ ] `npm run build && npm run start:prod` then `curl localhost:3000/health`
-- [ ] `npm ls typescript prisma @prisma/client` shows the pinned versions
+- [ ] `./scripts/dev.sh npm ci` from the root installs every workspace
+- [ ] `./scripts/dev.sh npm run build --workspace apps/api`, then `curl localhost:3000/health`
+- [ ] `./scripts/dev.sh npm ls typescript prisma @prisma/client` shows the pinned versions
 
 **Dependencies:** Task 1
-**Files:** `package.json`, `tsconfig.json`, `src/main.ts`, `src/app.module.ts`
+**Files:** `package.json`, `apps/api/package.json`, `apps/api/tsconfig.json`,
+`apps/api/src/main.ts`, `apps/api/src/app.module.ts`, `compose-dev.yaml`
 **Scope:** M
 
 ---
@@ -142,7 +153,7 @@ projects (unit / integration / e2e) so the fast suite stays fast.
 - [ ] `npm run lint && npm run typecheck && npm test` all pass with one smoke test
 
 **Dependencies:** Task 2
-**Files:** `eslint.config.mjs`, `.prettierrc`, `jest.config.ts`, `src/app.spec.ts`
+**Files:** `eslint.config.mjs`, `.prettierrc`, `jest.config.ts`, `apps/api/src/app.spec.ts`
 **Scope:** M
 
 ---
@@ -163,7 +174,7 @@ applies migrations, and truncates between tests.
 - [ ] `npm test -- --selectProjects integration` passes a test that writes and reads a row
 
 **Dependencies:** Task 3
-**Files:** `prisma/schema.prisma`, `src/shared/prisma/prisma.service.ts`, `src/shared/config/`, `test/integration-setup.ts`
+**Files:** `apps/api/prisma/schema.prisma`, `apps/api/src/shared/prisma/prisma.service.ts`, `apps/api/src/shared/config/`, `apps/api/test/integration-setup.ts`
 **Scope:** M
 
 ---
@@ -199,8 +210,8 @@ discriminated union at the service boundary with exhaustiveness checking.
 
 ### - [ ] Task 6: Reference data and seed
 
-**Description:** `currency`, `exchange` and `data_source` per `ARCHITECTURE.md`
-§7.1–§7.3, with a seed. These are foreign keys from `user`, `portfolio` and
+**Description:** `currency`, `exchange` and `data_source` per
+`SPEC-catalog.md`, with a seed. These are foreign keys from `user`, `portfolio` and
 `instrument`, so nothing downstream can migrate without them.
 
 **Acceptance criteria:**
@@ -213,7 +224,7 @@ discriminated union at the service boundary with exhaustiveness checking.
 - [ ] `npx prisma migrate reset && npx prisma db seed` twice, then integration test asserts row counts
 
 **Dependencies:** Task 4
-**Files:** `prisma/schema.prisma`, `prisma/seed.ts`, `src/modules/catalog/reference.controller.ts`, `*.int-spec.ts`
+**Files:** `apps/api/prisma/schema.prisma`, `apps/api/prisma/seed.ts`, `apps/api/src/modules/catalog/reference.controller.ts`, `*.int-spec.ts`
 **Scope:** M
 
 ---
@@ -232,20 +243,24 @@ discriminated union at the service boundary with exhaustiveness checking.
 ### - [ ] Task 7: GATE — update the ER model for auth tables
 
 **Description:** `SPEC-identity.md` introduces `user_credential` and `session`,
-which `ARCHITECTURE.md` deliberately excluded as an auth concern. That is a
-data-model change and falls under *Ask first* in `SPEC.md` §Boundaries. Update
-the model and get approval **before** writing the migration.
+which the original ER model deliberately excluded as an auth concern. That is a
+data-model change and falls under *Ask first* in `SPEC.md` §Boundaries.
+
+**Largely done ahead of time:** both tables are specified in `SPEC-identity.md`
+and present in `ARCHITECTURE.md` §5's ER diagram, and the token design is
+recorded in [ADR 0003](../docs/adr/0003-jwt-access-tokens-with-refresh-sessions.md).
+What remains is the explicit human sign-off before the migration is written.
 
 **Acceptance criteria:**
-- [ ] `ARCHITECTURE.md` §7 documents both new entities with full attribute tables
-- [ ] A mermaid diagram includes them and still parses
-- [ ] Human has approved the addition
+- [x] `SPEC-identity.md` documents all three entities with full attribute tables, and `ARCHITECTURE.md` §5's ER diagram includes them
+- [x] A mermaid diagram includes them and still parses
+- [ ] Human has approved the addition — specifically that `session` is a *refresh-token store* (`token_hash`, `client_type`, `replaced_by_id`), not a cookie-session table
 
 **Verification:**
 - [ ] Mermaid blocks parse; entity dictionary and diagrams stay consistent
 
 **Dependencies:** None (can run during Phase 0)
-**Files:** `ARCHITECTURE.md`
+**Files:** `SPEC-identity.md`, `ARCHITECTURE.md`
 **Scope:** XS
 
 ---
@@ -255,10 +270,16 @@ the model and get approval **before** writing the migration.
 **Description:** Migrate `user`, `user_credential`, `session`. Implement hashing
 as pure domain code with no I/O so it is unit-testable in isolation.
 
+`session` is a refresh-token store, not a cookie-session table — one row per
+logged-in device, holding a SHA-256 hash of the token and a rotation chain. See
+[ADR 0003](../docs/adr/0003-jwt-access-tokens-with-refresh-sessions.md).
+
 **Acceptance criteria:**
-- [ ] argon2id hashing (bcrypt cost ≥ 12 fallback if the native build fails)
+- [ ] argon2id hashing for **passwords** (bcrypt cost ≥ 12 fallback if the native build fails)
+- [ ] SHA-256 for the **refresh token** — deliberately not argon2id; the token is 256 bits of server randomness, so a slow hash buys nothing and costs latency on every refresh
 - [ ] `user.email` unique **by database constraint**, proven by a direct duplicate insert
 - [ ] Credentials in a separate table; the hash is never selectable via a user query
+- [ ] `session.token_hash` unique; `replaced_by_id` self-references `session` for the rotation chain
 - [ ] `base_currency_code` FK-validated against `currency`
 
 **Verification:**
@@ -266,49 +287,59 @@ as pure domain code with no I/O so it is unit-testable in isolation.
 - [ ] `npm test -- --selectProjects integration -- identity` — unique constraint
 
 **Dependencies:** Tasks 6, 7
-**Files:** `prisma/schema.prisma`, `src/modules/identity/domain/password.ts`, `password.spec.ts`, `identity.module.ts`, `*.int-spec.ts`
+**Files:** `apps/api/prisma/schema.prisma`, `apps/api/src/modules/identity/domain/password.ts`, `token.ts`, `*.spec.ts`, `identity.module.ts`, `*.int-spec.ts`
 **Scope:** M
 
 ---
 
 ### - [ ] Task 9: Register and login
 
-**Description:** `POST /auth/register` and `POST /auth/login`, both issuing a
-server-side session in an httpOnly cookie.
+**Description:** `POST /auth/register` and `POST /auth/login`, both issuing an
+access-token/refresh-token pair. Signup is open self-service — multi-user from
+the first slice.
 
 **Acceptance criteria:**
-- [ ] Both endpoints create a session row and set `httpOnly; Secure; SameSite=Lax`
+- [ ] Both endpoints create a `session` row storing only the SHA-256 hash of the refresh token, and return a signed EdDSA access token
+- [ ] The access token carries `sub`, `sid`, `iat`, `exp`, `iss`, `aud` and nothing else — no email, no display name
+- [ ] For `client_type = WEB` the refresh token is set as an `httpOnly; Secure; SameSite=Strict` cookie path-scoped to `/auth/refresh`, and never appears in a response body
+- [ ] For `client_type = ANDROID` both tokens are returned in the body and no cookie is set
 - [ ] Wrong password and unknown email return the **same** error and take **indistinguishable** time — no user enumeration through either channel
 - [ ] Password policy enforced: minimum 12 characters
-- [ ] Auth endpoints rate-limited per IP
-- [ ] No password or hash appears in any response or log line
+- [ ] Auth endpoints rate-limited per IP — open signup makes this first-slice, not hardening
+- [ ] No password, hash or raw token appears in any response or log line
 
 **Verification:**
-- [ ] E2E: register → cookie set → login → cookie set
+- [ ] E2E: register → token pair issued → login → token pair issued, for both client types
 - [ ] Integration test asserting the timing/response equivalence of the two failure modes
+- [ ] Integration test asserting the raw refresh token appears nowhere in the `session` table
 
 **Dependencies:** Task 8
-**Files:** `src/modules/identity/identity.controller.ts`, `identity.service.ts`, `dto/`, `test/e2e/identity.e2e-spec.ts`
+**Files:** `apps/api/src/modules/identity/identity.controller.ts`, `identity.service.ts`, `dto/`, `apps/api/test/e2e/identity.e2e-spec.ts`
 **Scope:** M
 
 ---
 
-### - [ ] Task 10: AuthGuard, session lifecycle, profile
+### - [ ] Task 10: AuthGuard, token refresh and rotation, profile
 
 **Description:** `AuthGuard` and the `CurrentUser` decorator — the public contract
-every other module consumes — plus `GET /auth/me`, `PATCH /auth/me`, `POST /auth/logout`.
+every other module consumes — plus `POST /auth/refresh`, `POST /auth/logout`,
+`POST /auth/logout-all`, `GET /auth/me` and `PATCH /auth/me`.
 
 **Acceptance criteria:**
-- [ ] `AuthGuard` rejects missing, unknown, expired and revoked sessions with 401 — never 500
-- [ ] `POST /auth/logout` revokes such that reusing the cookie returns 401
+- [ ] `AuthGuard` rejects missing, malformed, expired and wrongly-signed tokens with 401 — never 500
+- [ ] A token forged with `alg: none`, with the wrong key, or with an unknown `kid` is rejected. One test per forgery
+- [ ] `POST /auth/refresh` rotates: the presented token is revoked with `replaced_by_id` set, and a new pair issued
+- [ ] **Reuse detection** — replaying an already-rotated refresh token revokes the whole chain for that user
+- [ ] `POST /auth/logout` revokes the current session; `POST /auth/logout-all` revokes every session for the user
 - [ ] `CurrentUser` exposes the authenticated user id to controllers
 - [ ] `PATCH /auth/me` updates only `display_name`, `base_currency_code`, `timezone`
 
 **Verification:**
-- [ ] E2E covering all four rejection cases and the logout round trip
+- [ ] E2E covering every rejection case, the rotation round trip, and reuse detection
+- [ ] E2E proving logout-all invalidates a *second* device's session, not just the caller's
 
 **Dependencies:** Task 9
-**Files:** `src/modules/identity/auth.guard.ts`, `current-user.decorator.ts`, `identity.controller.ts`, `test/e2e/identity.e2e-spec.ts`
+**Files:** `apps/api/src/modules/identity/auth.guard.ts`, `current-user.decorator.ts`, `identity.controller.ts`, `apps/api/test/e2e/identity.e2e-spec.ts`
 **Scope:** M
 
 ---
@@ -325,7 +356,7 @@ every other module consumes — plus `GET /auth/me`, `PATCH /auth/me`, `POST /au
 
 ### - [ ] Task 11: Portfolio schema and owned reads
 
-**Description:** `portfolio` per `ARCHITECTURE.md` §7.5, with create, list and get.
+**Description:** `portfolio` per `SPEC-portfolio.md`, with create, list and get.
 Ownership is scoped **in the query**, never checked after fetching.
 
 **Acceptance criteria:**
@@ -339,7 +370,7 @@ Ownership is scoped **in the query**, never checked after fetching.
 - [ ] E2E: user A creates; user B gets `[]` from list and 404 on A's id
 
 **Dependencies:** Task 10
-**Files:** `prisma/schema.prisma`, `src/modules/portfolio/{portfolio.module,portfolio.service,portfolio.controller}.ts`, `dto/`
+**Files:** `apps/api/prisma/schema.prisma`, `apps/api/src/modules/portfolio/{portfolio.module,portfolio.service,portfolio.controller}.ts`, `dto/`
 **Scope:** M
 
 ---
@@ -361,7 +392,7 @@ per-user name uniqueness, and archive-not-delete.
 - [ ] E2E: archive → absent from list → unarchive → present
 
 **Dependencies:** Task 11
-**Files:** `prisma/schema.prisma` (migration), `portfolio.service.ts`, `portfolio.controller.ts`, `*.int-spec.ts`
+**Files:** `apps/api/prisma/schema.prisma` (migration), `portfolio.service.ts`, `portfolio.controller.ts`, `*.int-spec.ts`
 **Scope:** M
 
 ---
@@ -392,7 +423,7 @@ Prisma and require a hand-edited migration.
 - [ ] `npm test -- --selectProjects integration -- catalog`, including the raw-SQL violation attempts
 
 **Dependencies:** Tasks 5, 6, 10
-**Files:** `prisma/schema.prisma`, `prisma/migrations/*/migration.sql` (hand-edited), `src/modules/catalog/`, `*.int-spec.ts`
+**Files:** `apps/api/prisma/schema.prisma`, `apps/api/prisma/migrations/*/migration.sql` (hand-edited), `apps/api/src/modules/catalog/`, `*.int-spec.ts`
 **Scope:** M
 
 ---
@@ -414,7 +445,7 @@ optional relations that push `undefined` handling into every caller.
 - [ ] E2E: A's private instrument absent from B's list
 
 **Dependencies:** Task 13
-**Files:** `src/modules/catalog/{catalog.service,catalog.controller}.ts`, `domain/instrument.ts`, `*.spec.ts`
+**Files:** `apps/api/src/modules/catalog/{catalog.service,catalog.controller}.ts`, `domain/instrument.ts`, `*.spec.ts`
 **Scope:** M
 
 ---
@@ -435,7 +466,7 @@ contracts. Base and specialization must be written atomically.
 - [ ] E2E: create a private CDB, read it back, confirm B cannot
 
 **Dependencies:** Task 14
-**Files:** `src/modules/catalog/catalog.service.ts`, `catalog.controller.ts`, `dto/`, `*.int-spec.ts`
+**Files:** `apps/api/src/modules/catalog/catalog.service.ts`, `catalog.controller.ts`, `dto/`, `*.int-spec.ts`
 **Scope:** M
 
 ---
@@ -464,7 +495,7 @@ the scenario in `SPEC-portfolio.md` §Verification, verbatim.
 - [ ] `npm run test:e2e` green from a clean database
 
 **Dependencies:** Tasks 12, 15
-**Files:** `test/e2e/walking-skeleton.e2e-spec.ts`
+**Files:** `apps/api/test/e2e/walking-skeleton.e2e-spec.ts`
 **Scope:** S
 
 ---
@@ -491,6 +522,6 @@ the scenario in `SPEC-portfolio.md` §Verification, verbatim.
 ## Checkpoint: Complete
 - [ ] All acceptance criteria met across Tasks 1–17
 - [ ] Walking skeleton passes end to end from a clean checkout
-- [ ] Every entity in `ARCHITECTURE.md` §7 touched by this slice has a matching Prisma model
+- [ ] Every entity touched by this slice has a matching Prisma model
 - [ ] Open questions in `tasks/plan.md` revisited — especially the **undecided frontend framework**, which blocks `reporting`
 - [ ] Ready to specify `ledger`

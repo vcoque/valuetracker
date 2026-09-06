@@ -49,7 +49,7 @@ only the portfolio record itself.
 
 **`catalog` depends on `identity` solely because of private instruments.** A
 user-specific fixed-income contract carries `instrument.owner_user_id`
-(see `ARCHITECTURE.md` §6). The alternative — a separate `user-instrument`
+(see `ARCHITECTURE.md` §5, Complete ER Diagram). The alternative — a separate `user-instrument`
 module — would duplicate the entire instrument specialization hierarchy for one
 nullable column. The dependency is the cheaper trade.
 
@@ -71,14 +71,33 @@ Every module spec is named `SPEC-<module-id>.md` and must trace to a module id i
 this table. Project-wide concerns — stack, commands, structure, style, testing,
 boundaries — live once in [`SPEC.md`](./SPEC.md) and are not repeated per module.
 
+| [`docs/adr/`](./docs/adr/) | Accepted decisions: monorepo layout, native mobile, token strategy |
+
 | Artifact | Status |
 |---|---|
-| [`ARCHITECTURE.md`](./ARCHITECTURE.md) | Approved — data model for all modules |
+| [`ARCHITECTURE.md`](./ARCHITECTURE.md) | Approved — system-wide model: design decisions, ER diagram, cross-cutting invariants. Per-entity detail lives in each `SPEC-*.md` |
 | [`SPEC.md`](./SPEC.md) | Project-wide spec |
 | [`SPEC-identity.md`](./SPEC-identity.md) | Walking skeleton |
 | [`SPEC-catalog.md`](./SPEC-catalog.md) | Walking skeleton |
 | [`SPEC-portfolio.md`](./SPEC-portfolio.md) | Walking skeleton |
-| `SPEC-ledger.md` | Not yet written |
-| `SPEC-market-data.md` | Not yet written |
-| `SPEC-valuation.md` | Not yet written |
-| `SPEC-reporting.md` | Not yet written |
+| [`SPEC-ledger.md`](./SPEC-ledger.md) | Data model only — not yet specified |
+| [`SPEC-market-data.md`](./SPEC-market-data.md) | Data model only — not yet specified |
+| [`SPEC-valuation.md`](./SPEC-valuation.md) | Data model only — not yet specified |
+| [`SPEC-reporting.md`](./SPEC-reporting.md) | Read layer, owns no tables — not yet specified |
+
+---
+
+## Applications are not capabilities
+
+This map describes **backend capabilities**. The web frontend and the Android
+application are *consumers* of them, not modules alongside `ledger` or
+`valuation`, and they appear in `apps/` rather than here — see
+[ADR 0001](./docs/adr/0001-monorepo-with-npm-workspaces.md).
+
+This closes what `tasks/plan.md` recorded as "no `web-ui` module": adding one
+would have put a client into a dependency graph describing server-side
+capabilities, and muddled both.
+
+The contract between them is `packages/contract`, and the rule governing it is
+in `SPEC-reporting.md`: the API returns display-ready decimal strings, and
+clients format but never compute.

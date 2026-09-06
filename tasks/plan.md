@@ -23,6 +23,11 @@ Carried from [`SPEC.md`](../SPEC.md); repeated here only where they shape task o
   inheritance, so the `instrument` hierarchy is four 1:1 relations plus a
   database `CHECK` constraint that Prisma cannot express. That constraint lives
   in a hand-edited migration.
+- **Monorepo on npm workspaces.** The NestJS app lives in `apps/api`, not at the
+  repository root, and `packages/contract` holds the zod schemas the API
+  validates with and every client infers from. Decided before Task 2 because the
+  layout is effectively permanent once the app is scaffolded — see
+  [ADR 0001](../docs/adr/0001-monorepo-with-npm-workspaces.md).
 - **The toolchain is containerized, the host is not touched.** `Dockerfile.dev`
   and `compose-dev.yaml` pin Node 24.20.0 and a Postgres 17 dev database. Docker
   is the only host dependency, which makes the environment reproducible and
@@ -113,13 +118,20 @@ See [`tasks/todo.md`](./todo.md) for the full task detail. Summary:
 
 Blocking nothing in this plan, but unresolved:
 
-1. **Frontend framework — still undecided.** Raised, not answered. Does not block
-   the walking skeleton (backend only), but `CAPABILITY-MAP.md` has no `web-ui`
-   module, and the original requirement asks for graphs. Needs a decision before
-   `reporting` is specified.
-2. Session strategy and registration openness — recommendations given in
-   `SPEC-identity.md` §"Decisions Required"; confirm before Task 8.
+1. ~~**Frontend framework.**~~ Partly resolved. Build order is settled — backend,
+   then web, then native Android ([ADR 0002](../docs/adr/0002-native-android-app-not-webview.md)) —
+   and the "no `web-ui` module" gap is closed: applications live in `apps/` and
+   are consumers of capabilities, not modules alongside them. Which *framework*
+   builds `apps/web` is still open, tracked as `SPEC.md` question 7. It blocks
+   nothing here.
+2. ~~**Session strategy and registration openness.**~~ Resolved. JWT access
+   tokens with server-side refresh sessions, and open self-service signup —
+   [ADR 0003](../docs/adr/0003-jwt-access-tokens-with-refresh-sessions.md).
+   Tasks 8–10 are rewritten accordingly.
 3. `SPEC.md` open questions 1–2 (market-data provider, CDI/IPCA/SELIC index
    source) block `market-data` and `valuation`, not this plan.
-4. Deployment target and CI provider — Task 17 assumes GitHub Actions. Change it
-   if that is wrong.
+4. ~~**CI provider.**~~ Resolved: GitHub Actions, as Task 17 assumed. The
+   deployment *target* remains open and blocks nothing in this plan.
+5. Cash accounts (`SPEC.md` question 5) remain out of scope. Worth confirming
+   before `reporting` promises return figures, since without them true IRR is
+   not computable.
