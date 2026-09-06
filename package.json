@@ -15,10 +15,27 @@
     "build": "npm run build --workspace apps/api",
     "start:dev": "npm run start:dev --workspace apps/api",
     "start:prod": "npm run start:prod --workspace apps/api",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "NODE_OPTIONS=--experimental-vm-modules jest",
+    "test:e2e": "NODE_OPTIONS=--experimental-vm-modules jest --selectProjects e2e"
   },
   "allowScripts": {
     "prisma@7.10.0": true,
     "@prisma/engines@7.10.0": true
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/jest": "30.0.0",
+    "eslint": "10.10.0",
+    "eslint-config-prettier": "10.1.8",
+    "jest": "30.5.1",
+    "prettier": "3.9.6",
+    "ts-jest": "29.4.12",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.69.0"
   }
 }

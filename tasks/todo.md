@@ -183,22 +183,89 @@ root at `/workspace`, which is exactly the workspace root npm needs.
 
 ---
 
-### - [ ] Task 3: Quality gates
+### - [x] Task 3: Quality gates
 
 **Description:** ESLint, Prettier, and Jest configured as three selectable
 projects (unit / integration / e2e) so the fast suite stays fast.
 
 **Acceptance criteria:**
-- [ ] `npm test -- --selectProjects unit` runs only `src/**/*.spec.ts`
-- [ ] Integration and e2e projects are declared and select their own patterns
-- [ ] Coverage thresholds enforced: 80% global
-- [ ] Lint fails on `any` and on floating promises
+- [x] `npm test -- --selectProjects unit` runs only `src/**/*.spec.ts` — proved with
+      `--listTests`, and with a throwaway `*.int-spec.ts` that the unit project
+      correctly refused to pick up
+- [x] Integration and e2e projects are declared and select their own patterns —
+      all three are selectable; e2e has a real test, integration is empty until Task 4
+- [x] Coverage thresholds enforced: 80% global (branches, functions, lines, statements)
+- [x] Lint fails on `any` and on floating promises
 
 **Verification:**
-- [ ] `npm run lint && npm run typecheck && npm test` all pass with one smoke test
+- [x] `npm run lint && npm run typecheck && npm test` all pass — 3 tests, 2 suites
+- [x] `npm run build` still passes, and `npm run format:check` is clean
+- [x] Coverage is **100%** on every metric, with nothing excluded but `main.ts`
+- [x] The coverage gate is proven to *bite*, not merely to pass: an earlier
+      configuration reported 75% branches and Jest failed the run
+- [x] Both required lint rules proven to fire, by linting a throwaway file
+      containing an `any` parameter and an uncalled `await` — 2 errors, then deleted
+
+**Decisions taken here:**
+
+*NestJS 12 is ESM-only.* Every `@nestjs/*` package is `"type": "module"` with no
+CommonJS build. The application never noticed, because Node 24 satisfies
+`require()` of ESM transparently — but Jest's sandbox does not, and every suite
+failed with *"Must use import to load ES Module"*. The test scripts therefore run
+under `NODE_OPTIONS=--experimental-vm-modules`. This is a fact about the stack
+worth knowing before Task 4 adds Prisma to the same test path;
+`SPEC.md` §Version traps now records it.
+
+*`isolatedModules` is deliberately off, against ts-jest's own advice.* ts-jest
+emits `TS151002` recommending it under a hybrid module kind. Following that
+advice cost 25% branch coverage per decorated class, and the reason turned out to
+matter far more than the number: compiled file-by-file, TypeScript cannot tell a
+type import from a value import, so `emitDecoratorMetadata` degrades to
+
+```js
+typeof AppService !== "undefined" && AppService === "function" ? AppService : Object
+```
+
+— an unreachable branch wrapped around a **fallback that injects `Object`
+instead of the real provider**. Whole-program compilation emits the class
+itself. The advisory is suppressed in `jest.config.ts` with that reasoning
+written next to it. Coverage went from 75% to 100% as a side effect; the
+correctness fix was the point.
+
+*The threshold was never the thing to adjust.* The 80% bar failed twice during
+this task. Both times the fix was in the emitted code, not in the number, and
+nothing is excluded from the denominator except `main.ts` — a bootstrap file
+exercised by running the process rather than by importing it.
+
+*Three projects split by filename, not by directory,* so a module's unit and
+integration tests sit beside the code they test: `*.spec.ts`, `*.int-spec.ts`,
+`test/e2e/*.e2e-spec.ts`. `*.int-spec.ts` cannot match `*.spec.ts` — it ends in
+`-spec.ts` — which is what makes the fast project genuinely fast.
+
+*The e2e project ships with a real test rather than only a declaration.*
+`GET /health` needs no database, so it is the one endpoint that can prove the
+whole HTTP stack — Fastify adapter, routing, serialization — before Prisma
+exists. A project declared but never run is a project that is broken and nobody
+knows it.
+
+*`npm run lint` does not `--fix`.* `SPEC.md` documented it as `eslint --fix`, but
+every task in this list is gated on "lint passes", and a gate that rewrites the
+code until it passes is not a gate. Mutation moved to `lint:fix`;
+`SPEC.md` §Commands is updated to match.
+
+*Prettier governs code, not prose.* Left unscoped it wanted to reflow all
+thirteen Markdown specs and `compose-dev.yaml`. `.prettierignore` excludes
+`*.md` and `*.y[a]ml`, which are hand-wrapped and reviewed as English.
+
+**Known softening, to be removed:** `passWithNoTests: true` is set in
+`jest.config.ts` because the `integration` project is declared before it owns any
+test. Delete that line in Task 4, once it has one.
 
 **Dependencies:** Task 2
-**Files:** `eslint.config.mjs`, `.prettierrc`, `jest.config.ts`, `apps/api/src/app.spec.ts`
+**Files:** `eslint.config.mjs`, `.prettierrc`, `.prettierignore`,
+`jest.config.ts`, `package.json`, `apps/api/tsconfig.json`,
+`apps/api/tsconfig.build.json`, `apps/api/src/app.spec.ts`,
+`apps/api/test/e2e/health.e2e-spec.ts`, `SPEC.md`
 **Scope:** M
 
 ---
@@ -214,6 +281,8 @@ applies migrations, and truncates between tests.
 - [ ] Integration harness starts Postgres via Testcontainers and runs `migrate deploy`
 - [ ] Each integration test starts from a clean database
 - [ ] `DATABASE_URL` is read through zod-validated typed config, never `process.env` directly
+- [ ] `passWithNoTests: true` is deleted from `jest.config.ts` — the `integration`
+      project now owns a test, so "no tests found" should fail again (see Task 3)
 
 **Verification:**
 - [ ] `npm test -- --selectProjects integration` passes a test that writes and reads a row

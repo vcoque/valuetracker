@@ -1,0 +1,12 @@
+dist/
+coverage/
+node_modules/
+package-lock.json
+
+# Prose and orchestration are authored by hand, wrapped deliberately, and
+# reviewed as English rather than as code. Prettier reflows Markdown paragraphs
+# and re-indents YAML comments, which would rewrite every spec and ADR in the
+# repository for no reader's benefit. Prettier governs code here, not writing.
+*.md
+*.yaml
+*.yml

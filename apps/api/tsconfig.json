@@ -9,7 +9,10 @@
     // which is what the Nest runtime and ts-jest expect.
     "module": "nodenext",
     "moduleResolution": "nodenext",
-    "types": ["node"],
+    // `jest` is here rather than in tsconfig.build.json because this config
+    // also typechecks the test files; the build config narrows it back to
+    // ["node"] so test globals cannot leak into shipped code.
+    "types": ["node", "jest"],
 
     // NestJS reads constructor parameter types at runtime to resolve providers.
     // Both flags are load-bearing: without emitDecoratorMetadata every injected
@@ -26,6 +29,20 @@
 
     "esModuleInterop": true,
     "resolveJsonModule": true,
+    // Deliberately NOT isolatedModules. Compiling each file alone leaves the
+    // compiler unable to tell a type import from a value import, so
+    // emitDecoratorMetadata degrades to a defensive
+    //   typeof X !== "undefined" && X === "function" ? X : Object
+    // guard around every injected dependency. Those guards are unreachable
+    // branches no test can ever cover -- they cost ~25% branch coverage per
+    // decorated class -- and they inject `Object` instead of the real token
+    // whenever the guard is wrong. With whole-program compilation the metadata
+    // is the class itself. See jest.config.ts, which suppresses ts-jest's
+    // TS151002 advisory accordingly.
+
+    // Call the decorator helpers in tslib rather than emitting a copy of them
+    // into every compiled file.
+    "importHelpers": true,
     // Prisma and NestJS ship declaration files this project does not control.
     "skipLibCheck": true,
     "sourceMap": true

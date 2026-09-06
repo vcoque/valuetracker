@@ -62,7 +62,7 @@ Recorded so they can be challenged rather than discovered later:
 
 ### Version traps — verified against the npm registry, not assumed
 
-Three defaults are wrong and will break the build if taken at face value:
+Five defaults are wrong and will break the build if taken at face value:
 
 1. **`prisma@latest` resolves to `8.0.0-rc.12`, a release candidate**, while
    `@prisma/client@latest` is `7.10.0`. A plain
@@ -73,6 +73,28 @@ Three defaults are wrong and will break the build if taken at face value:
    **Pin TypeScript to `6.0.3`.**
 3. **NestJS 12 declares `engines: { node: ">= 20" }`.** Confirm the local Node
    version before the first install; Node 18 is EOL and will not work.
+4. **TypeScript 6 removed `moduleResolution: "node10"`** (`TS5107`), so the
+   stock NestJS `commonjs`/`node` tsconfig pair no longer compiles. `apps/api`
+   uses `module`/`moduleResolution: "nodenext"`; since the package declares no
+   `"type"`, every file is still emitted and resolved as CommonJS.
+5. **NestJS 12 is ESM-only** — every `@nestjs/*` package is `"type": "module"`
+   with no CommonJS build. Node 24 loads it from CommonJS transparently via
+   `require(esm)`, so the application runs, but Jest's sandbox does not: the
+   test scripts pass `NODE_OPTIONS=--experimental-vm-modules`, without which
+   every suite fails with *"Must use import to load ES Module"*.
+
+Two further traps live in the test toolchain rather than in the pins:
+
+- **`isolatedModules` and `emitDecoratorMetadata` must not be combined.**
+  ts-jest advises `isolatedModules: true` under a hybrid module kind
+  (`TS151002`), but a per-file compile cannot tell a type import from a value
+  import, so decorator metadata degrades into an unreachable `typeof` guard
+  that falls back to injecting `Object`. `apps/api` compiles whole-program and
+  suppresses that advisory in `jest.config.ts`.
+- **npm 11 does not run dependency install scripts by default.** Prisma's query
+  and schema engines are downloaded by one, so an unapproved install produces a
+  Prisma client with no engine. The root `package.json` grants `allowScripts`
+  to the pinned Prisma packages only.
 
 Record any change to these pins as an ADR — they were chosen against evidence,
 not preference.
@@ -100,8 +122,10 @@ Setup:        ./scripts/check-env.sh --init-env   # per-machine .env.dev.local
 Dev:          npm run start:dev            # watch mode, port 3000
 Build:        npm run build                # tsc -> dist/
 Start:        npm run start:prod           # node dist/main
-Lint:         npm run lint                 # eslint --fix
+Lint:         npm run lint                 # eslint, check only
+Lint (fix):   npm run lint:fix             # eslint --fix
 Format:       npm run format               # prettier --write
+Format check: npm run format:check         # prettier --check
 Typecheck:    npm run typecheck            # tsc --noEmit
 
 Test (all):   npm test
