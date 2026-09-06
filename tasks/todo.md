@@ -105,7 +105,7 @@ anyone who chooses to work host-natively.
 
 ---
 
-### - [ ] Task 2: Workspace root and NestJS scaffold in `apps/api`
+### - [x] Task 2: Workspace root and NestJS scaffold in `apps/api`
 
 **Description:** Establish the npm-workspaces root, then create the NestJS
 application inside `apps/api` on the Fastify adapter with the exact versions from
@@ -118,23 +118,68 @@ and the container working directory. See
 [ADR 0001](../docs/adr/0001-monorepo-with-npm-workspaces.md).
 
 **Acceptance criteria:**
-- [ ] Root `package.json` declares `workspaces: ["apps/*", "packages/*"]` and is `private: true`
-- [ ] The NestJS app lives in `apps/api`; nothing application-level sits at the repository root
-- [ ] `prisma` and `@prisma/client` both pinned to exactly `7.10.0` (not `^`, not `latest`)
-- [ ] `typescript` pinned to `6.0.3`; TS 7.x must not appear in the lockfile
-- [ ] `tsconfig.json` has `strict: true`, `emitDecoratorMetadata`, `experimentalDecorators`
-- [ ] One lockfile at the root — a lockfile inside a workspace means the root was bypassed
-- [ ] App boots on Fastify and answers `GET /health` with 200
+- [x] Root `package.json` declares `workspaces: ["apps/*", "packages/*"]` and is `private: true`
+- [x] The NestJS app lives in `apps/api`; nothing application-level sits at the repository root
+- [x] `prisma` and `@prisma/client` both pinned to exactly `7.10.0` (not `^`, not `latest`)
+- [x] `typescript` pinned to `6.0.3`; TS 7.x must not appear in the lockfile
+- [x] `tsconfig.json` has `strict: true`, `emitDecoratorMetadata`, `experimentalDecorators`
+- [x] One lockfile at the root — a lockfile inside a workspace means the root was bypassed
+- [x] App boots on Fastify and answers `GET /health` with 200 — `{"status":"ok"}`
 
 **Verification:**
-- [ ] `./scripts/dev.sh npm ci` from the root installs every workspace
-- [ ] `./scripts/dev.sh npm run build --workspace apps/api`, then `curl localhost:3000/health`
-- [ ] `./scripts/dev.sh npm ls typescript prisma @prisma/client` shows the pinned versions
+- [x] `./scripts/dev.sh npm install` from the root installs every workspace (207 packages)
+- [x] `./scripts/dev.sh npm run build --workspace apps/api`, then `curl localhost:3000/health`
+      → `{"status":"ok"} <- HTTP 200`, curled from the **host** against the published port
+- [x] `./scripts/dev.sh npm ls typescript prisma @prisma/client` shows `6.0.3` / `7.10.0` / `7.10.0`
+- [x] `./scripts/dev.sh npm run typecheck` passes
+
+**Decisions taken here:**
+
+*`moduleResolution: nodenext`, not the classic `commonjs`/`node` pair.*
+TypeScript 6 fails the build outright on `node10` resolution (`TS5107`), so the
+NestJS default tsconfig cannot be used verbatim. `nodenext` reads the nearest
+`package.json` to pick a module system; `apps/api` declares no `"type"`, so
+every file is still emitted and resolved as CommonJS — which is what the Nest
+runtime and ts-jest expect. This is the first concrete consequence of the
+TypeScript 6.0.3 pin, and it is a version trap the spec did not anticipate.
+
+*A separate `tsconfig.build.json`.* The base config typechecks tests as well as
+sources; the build config narrows to `src/` and excludes `*.spec.ts` so no test
+file is ever emitted into `dist/`.
+
+*No `@nestjs/cli`.* `SPEC.md` defines the build as `tsc -> dist/`, which needs
+no generator. `start:dev` is `tsc --watch` alongside `node --watch`, so watch
+mode costs no extra dependency.
+
+*Prisma's install scripts are approved explicitly, and pinned.* npm 11 no longer
+runs dependency install scripts by default, so the first install left Prisma's
+query and schema engines undownloaded — a failure that would only have surfaced
+in Task 4, as a missing engine binary. `allowScripts` in the root
+`package.json` grants exactly `prisma@7.10.0` and `@prisma/engines@7.10.0`;
+`--allow-scripts-pin` writes the version, so a future bump has to be approved
+again rather than inheriting trust.
+
+*`curl` added to `Dockerfile.dev`.* `node:*-slim` omits it, and both `SPEC.md`
+§Commands and this task's own verification step are written in terms of `curl`.
+The documented check now runs as documented.
+
+**Known and accepted:** `npm audit` reports 4 high-severity advisories, all of
+them transitive dependencies of the `prisma` **CLI** (`@prisma/config` →
+`deepmerge-ts`, and the unused `mysql2` driver adapter). None is reachable from
+`@prisma/client` at runtime, and none is reachable at all on PostgreSQL. The
+only offered fix downgrades to `prisma@6.19.3`, which would break the pin
+`SPEC.md` §Version traps set against evidence. Revisit when Prisma 7.x updates
+those transitives.
 
 **Dependencies:** Task 1
-**Files:** `package.json`, `apps/api/package.json`, `apps/api/tsconfig.json`,
-`apps/api/src/main.ts`, `apps/api/src/app.module.ts`, `compose-dev.yaml`
+**Files:** `package.json`, `package-lock.json`, `apps/api/package.json`,
+`apps/api/tsconfig.json`, `apps/api/tsconfig.build.json`, `apps/api/src/main.ts`,
+`apps/api/src/app.module.ts`, `apps/api/src/app.controller.ts`,
+`apps/api/src/app.service.ts`, `Dockerfile.dev`
 **Scope:** M
+
+**Note:** `compose-dev.yaml` needed no change — it already bind-mounts the repo
+root at `/workspace`, which is exactly the workspace root npm needs.
 
 ---
 

@@ -1,0 +1,34 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    // TypeScript 6 rejects the legacy "node10" resolution outright, so the
+    // classic NestJS `commonjs`/`node` pair is not available. "nodenext" reads
+    // the nearest package.json to decide the module system; apps/api declares
+    // no "type", so every file here is emitted -- and resolved -- as CommonJS,
+    // which is what the Nest runtime and ts-jest expect.
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["node"],
+
+    // NestJS reads constructor parameter types at runtime to resolve providers.
+    // Both flags are load-bearing: without emitDecoratorMetadata every injected
+    // dependency resolves to undefined at boot, with no compile-time error.
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "forceConsistentCasingInFileNames": true,
+
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    // Prisma and NestJS ship declaration files this project does not control.
+    "skipLibCheck": true,
+    "sourceMap": true
+  },
+  "include": ["src/**/*", "test/**/*"]
+}

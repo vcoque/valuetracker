@@ -1,0 +1,17 @@
+{
+  // The shipped build: production sources only. Tests are typechecked by the
+  // base config (`npm run typecheck`) but never emitted into dist/.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "declaration": false
+  },
+  "include": ["src/**/*"],
+  "exclude": [
+    "src/**/*.spec.ts",
+    "src/**/*.int-spec.ts",
+    "dist",
+    "node_modules"
+  ]
+}

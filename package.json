@@ -1,0 +1,24 @@
+{
+  "name": "valuetracker",
+  "version": "0.0.0",
+  "private": true,
+  "description": "ValueTracker monorepo root. Applications live in apps/, shared contracts in packages/ -- see docs/adr/0001-monorepo-with-npm-workspaces.md",
+  "license": "UNLICENSED",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "npm run build --workspace apps/api",
+    "start:dev": "npm run start:dev --workspace apps/api",
+    "start:prod": "npm run start:prod --workspace apps/api",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "allowScripts": {
+    "prisma@7.10.0": true,
+    "@prisma/engines@7.10.0": true
+  }
+}

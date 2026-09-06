@@ -13,8 +13,10 @@ FROM ${NODE_IMAGE}
 # openssl  -- Prisma's query engine links libssl, and node:*-slim ships without
 #             it. Omitting this fails at runtime, not at build time.
 # git      -- npm dependencies on git URLs, and Prisma migration tooling.
+# curl     -- the documented way to verify a running endpoint (SPEC.md and the
+#             task list both spell `curl .../health`); node:*-slim omits it.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates git openssl \
+ && apt-get install -y --no-install-recommends ca-certificates curl git openssl \
  && rm -rf /var/lib/apt/lists/* \
  && mkdir -p /home/node/.npm \
  && chown -R node:node /home/node
