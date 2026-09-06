@@ -68,6 +68,12 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:?}:${POSTGRES_PASSWORD:?}@db:5432/${POSTGRES_DB:?}
       TESTCONTAINERS_HOST_OVERRIDE: ${TESTCONTAINERS_HOST_OVERRIDE:?set in .env.dev}
       NODE_ENV: ${NODE_ENV:?set NODE_ENV in .env.dev}
+      # The integration harness starts its own throwaway database and builds it
+      # from this same image, so the version tests run against and the version
+      # development runs against cannot drift apart. A constraint that holds on
+      # one PostgreSQL and not the other is precisely the bug the real-database
+      # test strategy exists to catch.
+      POSTGRES_IMAGE: ${POSTGRES_IMAGE:?set POSTGRES_IMAGE in .env.dev}
     ports:
       - "${APP_HOST_PORT:?set APP_HOST_PORT in .env.dev}:3000"
     depends_on:

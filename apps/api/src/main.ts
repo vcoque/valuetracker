@@ -23,6 +23,12 @@ async function bootstrap(): Promise<void> {
     AppModule,
     new FastifyAdapter(),
   );
+
+  // Without this, SIGTERM kills the process outright and no provider's
+  // onModuleDestroy runs -- the database pool is dropped rather than closed,
+  // which on a rolling deploy leaves connections to time out server-side.
+  app.enableShutdownHooks();
+
   await app.listen(PORT, HOST);
 }
 

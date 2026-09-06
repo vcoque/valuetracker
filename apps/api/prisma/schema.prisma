@@ -1,0 +1,46 @@
+// ValueTracker database schema.
+//
+// Table and column names are snake_case, matching ARCHITECTURE.md and the
+// SPEC-*.md entity dictionaries exactly; the Prisma models above them are
+// PascalCase/camelCase, matching TypeScript. Every mapping is explicit, so a
+// column can be read straight out of a spec and found in the database under the
+// same name.
+//
+// Prisma 7 removed `url` from the datasource block entirely. The CLI reads its
+// connection string from ../prisma.config.ts, and the running client is given a
+// driver adapter built from the validated config in src/shared/config -- which
+// is exactly the separation SPEC.md §Boundaries asks for: application code never
+// reaches into process.env for a connection string.
+
+datasource db {
+  provider = "postgresql"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+/// ISO 4217 reference data. Seeded, never user-editable.
+/// Specified in SPEC-catalog.md §currency; owned by the `catalog` module.
+///
+/// It lands here in Task 4 rather than Task 6 because it is the root of the
+/// foreign-key graph -- `user`, `portfolio` and `instrument` all point at it --
+/// and because the integration harness needs one real, specified table to prove
+/// itself against. Task 6 adds `exchange`, `data_source` and the seed.
+model Currency {
+  /// ISO 4217 code, e.g. BRL, USD.
+  code String @id @db.Char(3)
+
+  /// Display name, e.g. "Brazilian Real".
+  name String @db.VarChar(64)
+
+  /// Display symbol, e.g. R$. Not every currency has one in common use.
+  symbol String? @db.VarChar(8)
+
+  /// Decimal places the currency subdivides into -- normally 2, but 0 for JPY
+  /// and 3 for KWD. Money is stored as an exact decimal regardless; this drives
+  /// presentation, never arithmetic.
+  minorUnit Int @map("minor_unit")
+
+  @@map("currency")
+}

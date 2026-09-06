@@ -60,6 +60,9 @@ const config: Config = {
       testEnvironment: 'node',
       testMatch: ['<rootDir>/apps/*/src/**/*.int-spec.ts'],
       transform,
+      globalSetup: '<rootDir>/apps/api/test/global-setup.ts',
+      globalTeardown: '<rootDir>/apps/api/test/global-teardown.ts',
+      setupFilesAfterEnv: ['<rootDir>/apps/api/test/integration-setup.ts'],
       // Testcontainers has to pull and start a PostgreSQL image per run.
       testTimeout: 60_000,
     },
@@ -69,6 +72,14 @@ const config: Config = {
       testEnvironment: 'node',
       testMatch: ['<rootDir>/apps/*/test/e2e/**/*.e2e-spec.ts'],
       transform,
+      // e2e runs against the same throwaway server and the same clean-slate
+      // rule: AppModule now owns a database connection, so "full HTTP stack"
+      // includes the stack reaching Postgres. Naming the same hook files as the
+      // integration project above is intentional -- Jest keys global hooks by
+      // module path, so both projects share one container.
+      globalSetup: '<rootDir>/apps/api/test/global-setup.ts',
+      globalTeardown: '<rootDir>/apps/api/test/global-teardown.ts',
+      setupFilesAfterEnv: ['<rootDir>/apps/api/test/integration-setup.ts'],
       testTimeout: 60_000,
     },
   ],
@@ -94,12 +105,6 @@ const config: Config = {
       statements: 80,
     },
   },
-
-  // The `integration` project is declared here but owns no test until Task 4
-  // wires Prisma up. Without this, selecting it -- or running the full suite --
-  // fails on "no tests found" rather than on anything real. Remove this line
-  // once that project has tests of its own.
-  passWithNoTests: true,
 };
 
 export default config;

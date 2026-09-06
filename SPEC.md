@@ -51,6 +51,7 @@ Recorded so they can be challenged rather than discovered later:
 | Framework | NestJS on the Fastify adapter | **12.0.1** | Its module system maps 1:1 onto the capability map; DI keeps the cost-basis engine testable with zero I/O |
 | Scheduling | `@nestjs/schedule` | **12.0.1** | Cron for `market-data` ingestion and the `valuation` snapshot job |
 | ORM / migrations | Prisma | **7.10.0** | `Decimal` is decimal.js-backed and maps to Postgres `NUMERIC`; schema-as-source-of-truth with generated types |
+| Database driver | `@prisma/adapter-pg` | **7.10.0** | Prisma 7 has no Rust query engine and no `url` in the datasource block — a direct connection *requires* a driver adapter. Bundles `pg`. See [ADR 0004](./docs/adr/0004-prisma-7-driver-adapters.md) |
 | Toolchain host | Docker Engine + Compose v2 | **any current** | The only host dependency; Node and the build tools live in the image |
 | Database | PostgreSQL | **16+** | `NUMERIC` for exact money, range partitioning for the time-series tables, partial indexes |
 | Decimal math | `decimal.js` | **10.6.0** | Bundled with Prisma; used directly in pure domain code |
@@ -62,7 +63,7 @@ Recorded so they can be challenged rather than discovered later:
 
 ### Version traps — verified against the npm registry, not assumed
 
-Five defaults are wrong and will break the build if taken at face value:
+Six defaults are wrong and will break the build if taken at face value:
 
 1. **`prisma@latest` resolves to `8.0.0-rc.12`, a release candidate**, while
    `@prisma/client@latest` is `7.10.0`. A plain
@@ -82,6 +83,12 @@ Five defaults are wrong and will break the build if taken at face value:
    `require(esm)`, so the application runs, but Jest's sandbox does not: the
    test scripts pass `NODE_OPTIONS=--experimental-vm-modules`, without which
    every suite fails with *"Must use import to load ES Module"*.
+
+6. **Prisma 7 removed `url` from the `datasource` block** and dropped the Rust
+   query engine. The connection URL for `migrate`/`generate` lives in
+   `apps/api/prisma.config.ts`, and the running client is constructed with a
+   driver adapter. Copying a Prisma 6 schema in will fail `prisma validate`.
+   See [ADR 0004](./docs/adr/0004-prisma-7-driver-adapters.md).
 
 Two further traps live in the test toolchain rather than in the pins:
 

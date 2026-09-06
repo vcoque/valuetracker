@@ -59,6 +59,36 @@ export default tseslint.config(
         'error',
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
       ],
+
+      // SPEC.md §Boundaries requires configuration to arrive through the
+      // zod-validated typed config, never from a raw environment read. Stated as
+      // a convention this decays the first time someone needs a value in a
+      // hurry; stated as a lint error it does not. `src/shared/config` is the
+      // one sanctioned reader in application code and opts out on a single
+      // annotated line, so the exception is visible in review.
+      'no-restricted-properties': [
+        'error',
+        {
+          object: 'process',
+          property: 'env',
+          message:
+            'Read configuration through AppConfig (src/shared/config) instead ' +
+            'of process.env, so a missing value fails at startup and names itself.',
+        },
+      ],
+    },
+  },
+
+  // The test harness is environment plumbing by definition -- starting a
+  // throwaway database and repointing DATABASE_URL at it is its entire job, and
+  // it runs before any application code exists to ask. Banning the read here
+  // would mean an escape hatch on every second line, which trains people to
+  // reach for the escape hatch. The ban stays absolute where it means something:
+  // application code under src/.
+  {
+    files: ['apps/*/test/**/*.ts'],
+    rules: {
+      'no-restricted-properties': 'off',
     },
   },
 

@@ -63,7 +63,7 @@ the chosen engine offers. Two constraints are non-negotiable regardless of engin
 | 5 | Security identity | **Shared instrument catalog, separate from holdings** | `instrument` is the security; `position` is a portfolio's holding of it. PETR4's price history is stored once and read by every user, giving market-data ingestion a single row to write. | An asset owned by each portfolio, which duplicates identical price history per portfolio and per user. |
 | 6 | Cost basis | **Weighted average** | Matches how Brazilian brokers report and what most investors expect. Basis is derived from the transaction ledger; no lot tracking required. | FIFO tax lots — correct for US-style tax reporting, but adds `tax_lot` and lot-consumption tables that v1 does not need. |
 | 7 | Valuation for charts | **Daily snapshot tables** | A multi-year chart becomes one indexed range scan instead of replaying the whole ledger against price history on every request. | Deriving on the fly, which degrades sharply as history grows. |
-| 8 | Database engine | **Undecided — model stays engine-agnostic** | The model is expressed conceptually so the engine choice stays open. | Committing to vendor DDL before the runtime stack is chosen. |
+| 8 | Database engine | **PostgreSQL** (the model above stays conceptual) | Settled once the runtime stack was, and realised in DDL from Task 4 onward: `apps/api/prisma/schema.prisma` and its migrations are PostgreSQL-specific. This document stays engine-agnostic on purpose — it describes the model, not its encoding — so the two are read for different things. | Deferring the choice further, which by Task 4 only meant not writing the migrations the walking skeleton needs. |
 
 ---
 

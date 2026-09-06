@@ -270,25 +270,107 @@ test. Delete that line in Task 4, once it has one.
 
 ---
 
-### - [ ] Task 4: Prisma + Testcontainers harness
+### - [x] Task 4: Prisma + Testcontainers harness
 
 **Description:** Wire Prisma to PostgreSQL, add `PrismaService` with lifecycle
 hooks, and build the integration-test harness that starts a real Postgres,
 applies migrations, and truncates between tests.
 
 **Acceptance criteria:**
-- [ ] `PrismaService` connects on module init and disconnects on shutdown
-- [ ] Integration harness starts Postgres via Testcontainers and runs `migrate deploy`
-- [ ] Each integration test starts from a clean database
-- [ ] `DATABASE_URL` is read through zod-validated typed config, never `process.env` directly
-- [ ] `passWithNoTests: true` is deleted from `jest.config.ts` — the `integration`
-      project now owns a test, so "no tests found" should fail again (see Task 3)
+- [x] `PrismaService` connects on module init and disconnects on shutdown — both
+      proven by spying on `$connect`/`$disconnect` across the Nest lifecycle
+- [x] Integration harness starts Postgres via Testcontainers and runs `migrate deploy`
+- [x] Each integration test starts from a clean database — and each test *file*
+      gets its own database, see below
+- [x] `DATABASE_URL` is read through zod-validated typed config, never `process.env`
+      directly — and this is now enforced by ESLint, not by convention
+- [x] `passWithNoTests: true` is deleted from `jest.config.ts` — the `integration`
+      project now owns a test, so "no tests found" fails again (see Task 3)
 
 **Verification:**
-- [ ] `npm test -- --selectProjects integration` passes a test that writes and reads a row
+- [x] `npm test -- --selectProjects integration` passes tests that write and read rows
+- [x] Full bar green: `typecheck`, `lint`, `format:check`, `build`, 18 tests across
+      three projects, **100% coverage** on every metric with nothing excluded but `main.ts`
+- [x] A unit-only run starts **no** container: `--selectProjects unit` is 3.8s and
+      prints no migration output
+- [x] Parallel isolation proven, not assumed: two throwaway `*.int-spec.ts` files
+      writing and truncating concurrently both passed, then were deleted
+- [x] Ten consecutive full runs green
+
+**Decisions taken here:**
+
+*Prisma 7 connects through a driver adapter — see
+[ADR 0004](../docs/adr/0004-prisma-7-driver-adapters.md).* `url` is no longer
+allowed in the `datasource` block, there is no Rust query engine, and the CLI
+reads `apps/api/prisma.config.ts` while the client is constructed with
+`@prisma/adapter-pg`. That is a new runtime dependency, raised and approved
+rather than assumed. It also means `SPEC.md`'s "never read `process.env`
+directly" stopped fighting the tool: Prisma 7 *requires* the connection string be
+handed in, which is exactly what `AppConfig` does.
+
+*The ban on `process.env` is a lint rule, not a paragraph.*
+`no-restricted-properties` fails the build on any environment read in
+application code; `src/shared/config/config.module.ts` opts out on one annotated
+line. The harness under `test/` is exempt by file, because repointing
+`DATABASE_URL` at a throwaway database is its entire job — a per-line escape
+hatch every second line only teaches people to reach for the escape hatch.
+
+*`currency` lands here rather than in Task 6.* The harness needs one real,
+specified table to prove itself against, and an invented one would be a
+permanent fixture in the production schema. `currency` is the root of the
+foreign-key graph (`user`, `portfolio` and `instrument` all reference it) and is
+fully specified in `SPEC-catalog.md`. Task 6 keeps `exchange`, `data_source`, the
+seed and the endpoints.
+
+*The migration was authored with `prisma migrate diff`, not `migrate dev`.*
+`migrate dev` wants a live database and a shadow database, and would have run
+against the shared development instance. `--from-empty --to-schema` renders the
+same SQL deterministically with no database at all. The harness then applies it
+with `migrate deploy`, so tests exercise the committed migration exactly as a
+deployment would — a migration that only works when Prisma regenerates it is a
+broken migration.
+
+*One container for the run, one database per test file, one TRUNCATE per test.*
+Three mechanisms because there are three distinct problems. Jest runs test files
+in parallel workers, so a single shared database means one file's clean-up
+TRUNCATE silently deletes another file's rows mid-test — intermittent, dependent
+on worker scheduling, and it reads like a bug in the code under test. Each file
+therefore clones its own database from a migrated template, which is a file copy
+rather than a migration replay. Within a file, tests still share a database, so
+each starts from a TRUNCATE.
+
+*The global hooks are declared on the two database-backed projects, not at the
+root.* A root-level `globalSetup` runs for every invocation, so
+`--selectProjects unit` would have paid five seconds of container startup to run
+tests that never touch a database — defeating the fast loop Task 3 exists to
+protect. Jest keys global hooks by module path, so naming the same file on both
+projects still starts exactly one container.
+
+*`global-setup.ts` repoints `DATABASE_URL` before any worker starts.* This is a
+safety property, not a convenience. Inside the toolchain container that variable
+otherwise names the **development** database, so any code reading it at module
+scope — before the per-file hook narrows it — would connect to real development
+data and succeed. A throwaway probe did exactly that during this task and wrote
+nothing, because the table did not exist; on a seeded dev database it would have
+written. The worst case is now the throwaway template.
+
+**Known and accepted:** one full run failed in `integration-setup`'s `beforeAll`
+immediately after `npm run format` rewrote that file mid-flight — a stale ts-jest
+cache. It did not reproduce in ten subsequent runs, including with a cleared
+cache. `CREATE DATABASE ... TEMPLATE` is nonetheless genuinely racy under
+concurrency (PostgreSQL `55006`), so it now retries with backoff rather than
+relying on the race not recurring.
 
 **Dependencies:** Task 3
-**Files:** `apps/api/prisma/schema.prisma`, `apps/api/src/shared/prisma/prisma.service.ts`, `apps/api/src/shared/config/`, `apps/api/test/integration-setup.ts`
+**Files:** `apps/api/prisma/schema.prisma`, `apps/api/prisma.config.ts`,
+`apps/api/prisma/migrations/*/migration.sql`,
+`apps/api/src/shared/config/app-config.ts`, `apps/api/src/shared/config/config.module.ts`,
+`apps/api/src/shared/prisma/prisma.service.ts`, `apps/api/src/shared/prisma/prisma.module.ts`,
+`apps/api/test/database.ts`, `apps/api/test/global-setup.ts`,
+`apps/api/test/global-teardown.ts`, `apps/api/test/integration-setup.ts`,
+`apps/api/src/app.module.ts`, `apps/api/src/main.ts`, `jest.config.ts`,
+`eslint.config.mjs`, `compose-dev.yaml`, `SPEC.md`, `ARCHITECTURE.md`,
+`docs/adr/0004-prisma-7-driver-adapters.md`
 **Scope:** M
 
 ---
@@ -328,8 +410,14 @@ discriminated union at the service boundary with exhaustiveness checking.
 `SPEC-catalog.md`, with a seed. These are foreign keys from `user`, `portfolio` and
 `instrument`, so nothing downstream can migrate without them.
 
+**Reduced by Task 4:** `currency` is already migrated — Task 4 needed one real,
+specified table to prove the integration harness against, and `currency` is the
+root of the foreign-key graph. What remains here is `exchange`, `data_source`,
+the seed and the two endpoints.
+
 **Acceptance criteria:**
-- [ ] Three tables migrated with the documented columns and keys
+- [x] `currency` migrated with the documented columns and keys (Task 4)
+- [ ] `exchange` and `data_source` migrated with the documented columns and keys
 - [ ] Seed loads BRL, USD, EUR; the B3 exchange; at least one data source
 - [ ] Seed is idempotent — running twice leaves the same rows
 - [ ] `GET /currencies` and `GET /exchanges` return seeded data
