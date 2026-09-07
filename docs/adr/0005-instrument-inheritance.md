@@ -32,17 +32,18 @@ is a throwaway spike that settles it before Task 13 depends on it.
 
 ## What the spike did
 
-A throwaway spike under `apps/api/src/modules/catalog/_spike/` (to be deleted
-when Task 13 lands):
+A throwaway spike (three files, since deleted — commit `6b76f7d` preserves the
+runnable version; Ruling S9):
 
 - `spike.prisma` — a Prisma schema modelling the hierarchy as a base model with
   three optional 1:1 relations, each specialization keyed by `@id` on the shared
   `instrument_id`. **Not** added to `apps/api/prisma/schema.prisma`, never
   migrated, never generated into the app client.
-- `instrument-inheritance.int-spec.ts` — issues the full DDL by hand via
+- `instrument-inheritance.int-spec.ts` — issues the DDL below by hand via
   `$executeRawUnsafe` against a **real Postgres 17** (the Task 4 Testcontainers
-  harness), then proves behaviours 1–3. The DDL is exactly what a Task 13
-  migration would carry.
+  harness), then proves behaviours 1–3. The DDL is the **structural skeleton**
+  of what a Task 13 migration would carry — it omits `instrument_etf`,
+  `data_source_id`, the `is_variable_income` CHECK, and trims payload columns.
 - `instrument-union.spec.ts` — the discriminated union, an exhaustive `switch`
   with `default: assertNever(x)`, and a `// @ts-expect-error` fifth-case proof.
 
@@ -127,8 +128,10 @@ the path.
 
 **Keep Prisma 7 for `catalog`.** The hierarchy is expressible:
 
-- Prisma models base + specialization as ordinary 1:1 relations on the shared
-  primary key. Nested `create` / `include` will work against these tables.
+- Prisma expresses base + specialization as 1:1 relations on the shared primary
+  key **in the schema language** — `prisma validate` accepts it. The generated
+  client's nested `create` / `include` was **not** exercised by this spike (see
+  Consequences).
 - The three invariants Prisma cannot state are enforceable with **standard,
   declarative Postgres**: a discriminator lookup table, a composite
   `UNIQUE` + composite `FOREIGN KEY` per specialization, one deferred constraint
@@ -173,6 +176,15 @@ migration that does not replay is caught by the integration suite.
 
 ## Consequences
 
+- **OPEN RISK.** The generated Prisma client's nested `create` / `include`
+  against the shared-PK 1:1 relations is **unproven** — the spike exercised only
+  `prisma validate` (schema language) and a raw-SQL `$transaction` + join
+  round-trip. Task 13 **must** cover a real
+  `prisma.instrument.create({ data: { equity: { create: … } } })` and an
+  `include`-based read with an acceptance test. If the codegen misbehaves
+  against a composite-FK / shared-PK layout, the fallback is an explicit
+  two-write `$transaction` and a hand mapper — which does not change the GO
+  decision, only the amount of Prisma sugar Task 13 gets to use.
 - Task 13 owns: the four Prisma models, the hand-authored constraint SQL in the
   first `catalog` migration, an atomic `$transaction` create path, and a mapper
   producing the discriminated union for reads.
