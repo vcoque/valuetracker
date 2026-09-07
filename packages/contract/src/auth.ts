@@ -27,15 +27,14 @@ export type ClientTypeContract = z.infer<typeof clientTypeSchema>;
 const passwordSchema = z
   .string()
   .min(12, 'password must be at least 12 characters')
-  .max(256, 'password must be at most 256 characters');
+  .max(256, 'password must be at most 256 characters'); // DoS cap; value is never stored (hashed)
 
 const emailSchema = z
-  .string()
+  .email('must be a valid email address')
   .trim()
   .toLowerCase()
   .min(3)
-  .max(255)
-  .email('must be a valid email address');
+  .max(255); // mirrors db column width (SPEC-identity.md)
 
 /** ISO 4217 alpha-3, upper-case. Existence is enforced by the database FK. */
 const currencyCodeSchema = z
@@ -47,8 +46,8 @@ const currencyCodeSchema = z
 export const registerRequestSchema = z.object({
   email: emailSchema,
   password: passwordSchema,
-  displayName: z.string().trim().min(1).max(128).optional(),
-  baseCurrencyCode: currencyCodeSchema.default('USD'),
+  displayName: z.string().trim().min(1).max(128), // mirrors db column width (SPEC-identity.md)
+  baseCurrencyCode: currencyCodeSchema.default('BRL'),
   timezone: z.string().trim().min(1).max(64).default('UTC'),
   clientType: clientTypeSchema.default('WEB'),
 });
@@ -61,7 +60,7 @@ export const loginRequestSchema = z.object({
   // No minimum-length check on login: the policy is enforced at registration,
   // and rejecting a short password here would only tell an attacker their guess
   // was too short to be real. Bounded above for the same DoS reason as above.
-  password: z.string().min(1).max(256),
+  password: z.string().min(1).max(256), // DoS cap (never stored)
   clientType: clientTypeSchema.default('WEB'),
 });
 export type LoginRequest = z.infer<typeof loginRequestSchema>;
