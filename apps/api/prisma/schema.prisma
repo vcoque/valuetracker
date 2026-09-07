@@ -42,5 +42,56 @@ model Currency {
   /// presentation, never arithmetic.
   minorUnit Int @map("minor_unit")
 
+  /// Back-reference for the `exchange.currency_code` foreign key. Prisma
+  /// requires the relation to be named on both models; this is a virtual field
+  /// only -- it adds no column to `currency` and does not alter the Task 4
+  /// migration, which stays exactly as applied.
+  exchanges Exchange[]
+
   @@map("currency")
+}
+
+/// Trading venues. Reference data, seeded, not user-editable.
+/// Specified in SPEC-catalog.md §exchange; owned by the `catalog` module.
+model Exchange {
+  /// Venue code, e.g. B3, NASDAQ.
+  code String @id @db.VarChar(16)
+
+  /// Display name, e.g. "B3 - Brasil, Bolsa, Balcao".
+  name String @db.VarChar(128)
+
+  /// ISO 3166-1 alpha-2 country the venue operates in.
+  countryCode String @map("country_code") @db.Char(2)
+
+  /// Trading currency. Foreign key to `currency.code`.
+  currencyCode String @map("currency_code") @db.Char(3)
+
+  /// IANA timezone name, e.g. America/Sao_Paulo. Defines the trading-day
+  /// boundary.
+  timezone String @db.VarChar(64)
+
+  currency Currency @relation(fields: [currencyCode], references: [code])
+
+  @@map("exchange")
+}
+
+/// Provenance for every externally ingested fact.
+/// Specified in SPEC-catalog.md §data_source; owned by the `catalog` module.
+model DataSource {
+  /// Surrogate key. Defaulted in the database so a plain SQL insert needs no id.
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  /// Stable machine name, e.g. B3_EOD, COINGECKO. Unique.
+  name String @unique @db.VarChar(64)
+
+  /// Free-text description of what the source provides.
+  description String? @db.VarChar(255)
+
+  /// Lower value wins when two sources disagree on the same fact.
+  priority Int
+
+  /// Whether the source is currently in use.
+  isActive Boolean @map("is_active")
+
+  @@map("data_source")
 }

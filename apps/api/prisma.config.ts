@@ -46,4 +46,12 @@ export default defineConfig({
   datasource: {
     url: datasourceUrl(),
   },
+  migrations: {
+    // Prisma 7 replaced the legacy `package.json#prisma.seed` with this field.
+    // Node 24 strips the types in `prisma/seed.ts` natively -- no ts-node or
+    // tsx, no new dependency. `--disable-warning` silences the one-off
+    // MODULE_TYPELESS_PACKAGE_JSON notice Node prints when it re-parses an
+    // extensionless-package `.ts` file as an ES module.
+    seed: 'node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON prisma/seed.ts',
+  },
 });

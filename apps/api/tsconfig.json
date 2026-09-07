@@ -47,5 +47,5 @@
     "skipLibCheck": true,
     "sourceMap": true
   },
-  "include": ["src/**/*", "test/**/*", "prisma.config.ts"]
+  "include": ["src/**/*", "test/**/*", "prisma.config.ts", "prisma/seed.ts"]
 }
