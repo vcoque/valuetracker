@@ -39,12 +39,29 @@ const environmentSchema = z.object({
       'must be a postgres:// or postgresql:// connection string',
     ),
   NODE_ENV: z.enum(NODE_ENVS).default('development'),
+
+  // Access-token signing key: base64-encoded PKCS#8 PEM of an Ed25519 private
+  // key (ADR 0003 -- EdDSA). Optional here on purpose: outside production the
+  // application generates an ephemeral keypair at startup so a developer needs
+  // no key material to boot. Production without this value refuses to start --
+  // enforced in TokenService, not here, because "not set" is only fatal in one
+  // NODE_ENV. Base64 wraps the PEM so it survives a single-line env var intact.
+  JWT_PRIVATE_KEY: z.string().min(1).optional(),
+
+  // `iss` / `aud` claims. Stable, explicit values -- a token minted for one
+  // deployment must not verify against another. Dev defaults so local boot
+  // needs no configuration; a real deployment sets both.
+  JWT_ISSUER: z.string().min(1).default('valuetracker'),
+  JWT_AUDIENCE: z.string().min(1).default('valuetracker-api'),
 });
 
 export class AppConfig {
   constructor(
     readonly databaseUrl: string,
     readonly nodeEnv: NodeEnv,
+    readonly jwtPrivateKey: string | undefined,
+    readonly jwtIssuer: string,
+    readonly jwtAudience: string,
   ) {}
 }
 
@@ -69,5 +86,11 @@ export function loadAppConfig(
     throw new Error(`Invalid environment configuration:\n${problems}`);
   }
 
-  return new AppConfig(result.data.DATABASE_URL, result.data.NODE_ENV);
+  return new AppConfig(
+    result.data.DATABASE_URL,
+    result.data.NODE_ENV,
+    result.data.JWT_PRIVATE_KEY,
+    result.data.JWT_ISSUER,
+    result.data.JWT_AUDIENCE,
+  );
 }

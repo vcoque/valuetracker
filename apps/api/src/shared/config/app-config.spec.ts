@@ -55,6 +55,33 @@ describe('loadAppConfig', () => {
     ).toThrow(/NODE_ENV/);
   });
 
+  it('leaves JWT_PRIVATE_KEY undefined when unset and defaults iss/aud for dev', () => {
+    const config = loadAppConfig({ DATABASE_URL: VALID_URL });
+
+    expect(config.jwtPrivateKey).toBeUndefined();
+    expect(config.jwtIssuer).toBe('valuetracker');
+    expect(config.jwtAudience).toBe('valuetracker-api');
+  });
+
+  it('carries an explicit JWT signing key and iss/aud through', () => {
+    const config = loadAppConfig({
+      DATABASE_URL: VALID_URL,
+      JWT_PRIVATE_KEY: 'base64-pkcs8-pem',
+      JWT_ISSUER: 'valuetracker-prod',
+      JWT_AUDIENCE: 'valuetracker-prod-api',
+    });
+
+    expect(config.jwtPrivateKey).toBe('base64-pkcs8-pem');
+    expect(config.jwtIssuer).toBe('valuetracker-prod');
+    expect(config.jwtAudience).toBe('valuetracker-prod-api');
+  });
+
+  it('rejects an empty JWT_ISSUER rather than signing tokens with a blank claim', () => {
+    expect(() =>
+      loadAppConfig({ DATABASE_URL: VALID_URL, JWT_ISSUER: '' }),
+    ).toThrow(/JWT_ISSUER/);
+  });
+
   it('reports a whole-value failure against (root) rather than against no field', () => {
     // Not reachable from `process.env`, which is always an object -- but the
     // function is exported and takes any record, and an issue carrying an empty
