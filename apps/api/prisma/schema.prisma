@@ -48,6 +48,11 @@ model Currency {
   /// migration, which stays exactly as applied.
   exchanges Exchange[]
 
+  /// Back-reference for the `user.base_currency_code` foreign key (Task 8).
+  /// Virtual only -- no column on `currency`, and the Task 4/6 migrations are
+  /// untouched.
+  users User[]
+
   @@map("currency")
 }
 
@@ -94,4 +99,114 @@ model DataSource {
   isActive Boolean @map("is_active")
 
   @@map("data_source")
+}
+
+/// Transport a session's tokens travel over -- WEB (browser, cookie) or ANDROID
+/// (native client, request body). It records transport, never privilege: there
+/// is exactly one role in v1 (`SPEC-identity.md` §Objective).
+enum ClientType {
+  WEB
+  ANDROID
+
+  @@map("client_type")
+}
+
+/// A registered person. The root of every ownership chain -- `portfolio`,
+/// `instrument` holdings and the ledger all scope to a `user.id`.
+/// Specified in SPEC-identity.md §user; owned by the `identity` module.
+///
+/// The password hash is deliberately NOT on this model. It lives on
+/// `UserCredential`, reachable only through an explicit `include`, so no plain
+/// `prisma.user.findX` can return it and no user-facing read can leak it
+/// (SPEC-identity.md §user_credential).
+model User {
+  /// Surrogate key. Defaulted in the database so a plain SQL insert needs no id.
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  /// Login identity. Uniqueness is a database constraint, not just an
+  /// application check (SPEC-identity.md AC: "proven by a duplicate insert").
+  email String @unique @db.VarChar(255)
+
+  /// Shown in the UI; not an identifier.
+  displayName String @map("display_name") @db.VarChar(128)
+
+  /// Default currency for portfolios this user creates. Foreign key to
+  /// `currency.code`; unknown codes are rejected by the database
+  /// (SPEC-identity.md AC).
+  baseCurrencyCode String @map("base_currency_code") @db.Char(3)
+
+  /// IANA timezone name, e.g. America/Sao_Paulo.
+  timezone String @db.VarChar(64)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  baseCurrency Currency        @relation(fields: [baseCurrencyCode], references: [code])
+  credential   UserCredential?
+  sessions     Session[]
+
+  @@map("user")
+}
+
+/// One row per user who authenticates with a password. A provider-only (OIDC)
+/// account simply has no row here, which is what keeps that future addition
+/// migration-free (SPEC-identity.md §user_credential).
+/// Owned by the `identity` module.
+model UserCredential {
+  /// Primary key AND foreign key to `user.id`: exactly one credential per user.
+  userId String @id @map("user_id") @db.Uuid
+
+  /// argon2id encoded hash, parameters included. Never returned by a `user`
+  /// read; never logged.
+  passwordHash String @map("password_hash") @db.VarChar(255)
+
+  /// The algorithm that produced `password_hash`, recorded so a hash can be
+  /// upgraded in place when the parameters change (SPEC-identity.md).
+  algorithm String @db.VarChar(32)
+
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("user_credential")
+}
+
+/// A refresh-token store -- one row per logged-in device, NOT a cookie-session
+/// table (ADR 0003). Holds only a SHA-256 hash of the opaque refresh token; the
+/// token itself is never persisted. `replacedById` forms the rotation chain
+/// that drives reuse detection.
+/// Specified in SPEC-identity.md §session; owned by the `identity` module.
+model Session {
+  /// Internal identifier. Never sent to a client as a credential.
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  userId String @map("user_id") @db.Uuid
+
+  /// SHA-256 hex of the refresh token (64 chars). Unique: a token maps to at
+  /// most one live session (SPEC-identity.md AC).
+  tokenHash String @unique @map("token_hash") @db.Char(64)
+
+  /// Transport the session was opened over. See {@link ClientType}.
+  clientType ClientType @map("client_type")
+
+  /// Set to the successor session when this token is rotated; null while this
+  /// is the current token. Self-foreign-key to `session.id`; presenting a
+  /// token whose row has this set is reuse, and revokes the whole chain.
+  replacedById String? @map("replaced_by_id") @db.Uuid
+
+  issuedAt  DateTime  @default(now()) @map("issued_at")
+  /// Absolute expiry (issue + 30 days). No sliding window.
+  expiresAt DateTime  @map("expires_at")
+  /// Null while the session is valid.
+  revokedAt DateTime? @map("revoked_at")
+
+  userAgent String? @map("user_agent") @db.VarChar(255)
+  /// Client IP, IPv6-length.
+  ip        String? @db.VarChar(45)
+
+  user       User      @relation(fields: [userId], references: [id])
+  replacedBy Session?  @relation("SessionRotation", fields: [replacedById], references: [id])
+  replaces   Session[] @relation("SessionRotation")
+
+  @@map("session")
 }
