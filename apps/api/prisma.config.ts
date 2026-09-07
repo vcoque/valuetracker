@@ -13,9 +13,37 @@
 
 import { defineConfig, env } from 'prisma/config';
 
+/**
+ * The datasource URL for the commands that actually connect -- `migrate`,
+ * `db`, `studio`.
+ *
+ * `generate` also loads this file, and it runs from `apps/api`'s `postinstall`
+ * hook. A bare `npm ci` -- CI's install step before Postgres is provisioned, a
+ * future production image build on compiled output -- has no database and no
+ * `DATABASE_URL`. `generate` never reads the datasource URL (it only needs the
+ * schema), so a missing variable must not fail install.
+ *
+ * `env()` throws `PrismaConfigEnvError` the instant the variable is unset,
+ * which is right for a real datasource command and wrong for codegen. Catch
+ * that one case and fall back to an obviously-non-connecting placeholder:
+ * `generate` ignores it, and `migrate`/`db`/`studio` still fail loudly -- now
+ * as a connection error against `unset:unset@127.0.0.1:1/unset`, which names
+ * its own cause -- whenever the URL was genuinely required and absent.
+ *
+ * This stays the single source of the CLI connection string, and `env()`
+ * remains its only reader: no raw `process.env` access enters the file.
+ */
+function datasourceUrl(): string {
+  try {
+    return env('DATABASE_URL');
+  } catch {
+    return 'postgresql://unset:unset@127.0.0.1:1/unset';
+  }
+}
+
 export default defineConfig({
   schema: 'prisma/schema.prisma',
   datasource: {
-    url: env('DATABASE_URL'),
+    url: datasourceUrl(),
   },
 });
