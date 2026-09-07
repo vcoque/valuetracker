@@ -168,6 +168,11 @@ calls, which removes CSRF exposure from every endpoint except the refresh one.
 Recorded here because both were open questions in `SPEC.md`. See
 `docs/adr/0003-jwt-access-tokens-with-refresh-sessions.md` for the full case.
 
+**ER model additions approved.** The `user_credential` and `session` tables were
+added to the data model per this spec and `ARCHITECTURE.md` §5. The project owner
+approved this addition on 2026-09-07, confirming that `session` is a refresh-token
+store (rotation chain with reuse detection), not a cookie-session table. See ADR 0003.
+
 **Q3 — Session strategy: JWT access tokens with server-side refresh sessions,**
 as designed above. Supersedes the earlier cookie-session recommendation, which
 assumed a web-only client; a native Android app has no cookie jar.
