@@ -1,0 +1,84 @@
+// THROWAWAY SPIKE SCHEMA -- Task 5, not wired into anything.
+//
+// This file exists only so `prisma validate` can confirm that Prisma's schema
+// language expresses the `catalog` class-table inheritance as base +
+// specialization joined by a 1:1 relation on a shared primary key. It is never
+// migrated, never generated into the app client, never imported. The spike
+// integration test (`instrument-inheritance.int-spec.ts`) runs
+// `prisma validate --schema` against it and asserts it passes; the actual
+// create/read round-trip and the invariants Prisma CANNOT express (the
+// discriminator CHECK, the exactly-one-specialization rule, the partial unique
+// indexes) are proven with hand-authored DDL against a real Postgres in that
+// same test.
+//
+// Delete this whole `_spike/` directory once Task 13 lands the real `catalog`
+// module.
+
+datasource db {
+  provider = "postgresql"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+/// Base table. `instrumentType` is the discriminator.
+model SpikeInstrument {
+  id               String   @id @db.Uuid
+  instrumentType   String   @map("instrument_type")
+  ownerUserId      String?  @map("owner_user_id") @db.Uuid
+  name             String
+  currencyCode     String   @map("currency_code") @db.Char(3)
+  status           String
+  isVariableIncome Boolean  @map("is_variable_income")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  // The 1:1 relations. Each specialization is optional on the base; exactly one
+  // of them being present, and matching `instrumentType`, is the invariant the
+  // database enforces by hand -- Prisma has no way to state it here.
+  equity      SpikeInstrumentEquity?
+  fixedIncome SpikeInstrumentFixedIncome?
+  crypto      SpikeInstrumentCrypto?
+
+  @@map("instrument")
+}
+
+/// Specialization: shares the base primary key (`instrument_id`), so the
+/// relation is strictly 1:1.
+model SpikeInstrumentEquity {
+  instrumentId String  @id @map("instrument_id") @db.Uuid
+  ticker       String  @db.VarChar(16)
+  exchangeCode String  @map("exchange_code") @db.VarChar(16)
+  isin         String? @db.Char(12)
+  sector       String? @db.VarChar(64)
+  countryCode  String? @map("country_code") @db.Char(2)
+
+  instrument SpikeInstrument @relation(fields: [instrumentId], references: [id], onDelete: Cascade)
+
+  @@map("instrument_equity")
+}
+
+model SpikeInstrumentFixedIncome {
+  instrumentId   String   @id @map("instrument_id") @db.Uuid
+  issuerName     String   @map("issuer_name")
+  indexationType String   @map("indexation_type") @db.VarChar(16)
+  maturityDate   DateTime @map("maturity_date") @db.Date
+  faceValue      Decimal? @map("face_value") @db.Decimal(20, 6)
+
+  instrument SpikeInstrument @relation(fields: [instrumentId], references: [id], onDelete: Cascade)
+
+  @@map("instrument_fixed_income")
+}
+
+model SpikeInstrumentCrypto {
+  instrumentId    String  @id @map("instrument_id") @db.Uuid
+  symbol          String  @db.VarChar(16)
+  network         String? @db.VarChar(32)
+  contractAddress String? @map("contract_address") @db.VarChar(128)
+  decimals        Int
+
+  instrument SpikeInstrument @relation(fields: [instrumentId], references: [id], onDelete: Cascade)
+
+  @@map("instrument_crypto")
+}
