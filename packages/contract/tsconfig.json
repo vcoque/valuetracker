@@ -1,0 +1,27 @@
+{
+  // Standalone compile: this package is consumed as built output (dist/), never
+  // as source, so a client can depend on it without a TypeScript build of its
+  // own. `prepare` runs this on install, which is what puts dist/ in place
+  // before apps/api typechecks or builds against it.
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": [],
+
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "forceConsistentCasingInFileNames": true,
+
+    "declaration": true,
+    "sourceMap": true,
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*"]
+}
