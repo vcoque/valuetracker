@@ -30,11 +30,12 @@ const passwordSchema = z
   .max(256, 'password must be at most 256 characters'); // DoS cap; value is never stored (hashed)
 
 const emailSchema = z
-  .email('must be a valid email address')
+  .string()
   .trim()
   .toLowerCase()
   .min(3)
-  .max(255); // mirrors db column width (SPEC-identity.md)
+  .max(255) // mirrors db column width (SPEC-identity.md)
+  .email('must be a valid email address');
 
 /** ISO 4217 alpha-3, upper-case. Existence is enforced by the database FK. */
 const currencyCodeSchema = z
