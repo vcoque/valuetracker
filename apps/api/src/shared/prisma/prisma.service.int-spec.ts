@@ -72,21 +72,12 @@ describe('PrismaService (integration)', () => {
       applied.some((row) => row.migration_name.endsWith('init_currency')),
     ).toBe(true);
   });
-
-  it('disconnects when the module is destroyed', async () => {
-    // Asserting on the lifecycle call rather than on a failing query, because
-    // $disconnect() only releases the pool -- Prisma reconnects on the next
-    // query, so "a query afterwards throws" is not true and never was. What
-    // matters here is that Nest's shutdown actually reaches the service, which
-    // it only does because main.ts calls enableShutdownHooks().
-    const disconnect = jest.spyOn(prisma, '$disconnect');
-
-    await moduleRef.close();
-
-    expect(disconnect).toHaveBeenCalledTimes(1);
-  });
 });
 
+// Both tests below manage their own module -- closing it is the assertion
+// itself, so neither uses the `beforeEach`/`afterEach` pair above. Sharing
+// that pair would double-close the module: harmless to the assertion, since
+// it already ran, but it hides which close() the test is actually about.
 describe('PrismaService lifecycle (integration)', () => {
   it('connects eagerly on module init, not lazily on first query', async () => {
     const moduleRef = await Test.createTestingModule({
@@ -106,5 +97,25 @@ describe('PrismaService lifecycle (integration)', () => {
     expect(connect).toHaveBeenCalledTimes(1);
 
     await moduleRef.close();
+  });
+
+  it('disconnects when the module is destroyed', async () => {
+    const moduleRef = await Test.createTestingModule({
+      imports: [PrismaModule],
+    }).compile();
+
+    await moduleRef.init();
+    const prisma = moduleRef.get(PrismaService);
+
+    // Asserting on the lifecycle call rather than on a failing query, because
+    // $disconnect() only releases the pool -- Prisma reconnects on the next
+    // query, so "a query afterwards throws" is not true and never was. What
+    // matters here is that Nest's shutdown actually reaches the service, which
+    // it only does because main.ts calls enableShutdownHooks().
+    const disconnect = jest.spyOn(prisma, '$disconnect');
+
+    await moduleRef.close();
+
+    expect(disconnect).toHaveBeenCalledTimes(1);
   });
 });
