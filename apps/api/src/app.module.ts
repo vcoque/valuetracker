@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { CatalogModule } from './modules/catalog/catalog.module';
+import { IdentityModule } from './modules/identity/identity.module';
 import { PrismaModule } from './shared/prisma/prisma.module';
 
 /**
@@ -11,7 +12,7 @@ import { PrismaModule } from './shared/prisma/prisma.module';
  * endpoint and the shared database connection.
  */
 @Module({
-  imports: [PrismaModule, CatalogModule],
+  imports: [PrismaModule, IdentityModule, CatalogModule],
   controllers: [AppController],
   providers: [AppService],
 })

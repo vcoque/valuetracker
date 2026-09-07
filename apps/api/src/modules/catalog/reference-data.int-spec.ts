@@ -1,6 +1,7 @@
 import { Test, type TestingModule } from '@nestjs/testing';
 
 import { seedReferenceData } from '../../../prisma/seed';
+import { foreignKeyViolation, uniqueViolation } from '../../../test/pg-error';
 import { PrismaModule } from '../../shared/prisma/prisma.module';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 
@@ -36,16 +37,7 @@ describe('catalog reference data (integration)', () => {
        VALUES ('XX', 'Nowhere Exchange', 'ZZ', 'QQQ', 'Etc/UTC')`,
     );
 
-    await expect(insert).rejects.toMatchObject({
-      meta: {
-        driverAdapterError: {
-          cause: {
-            kind: 'ForeignKeyConstraintViolation',
-            originalCode: '23503',
-          },
-        },
-      },
-    });
+    await expect(insert).rejects.toMatchObject(foreignKeyViolation);
   });
 
   it('rejects a second data_source with a duplicate name (unique key, 23505)', async () => {
@@ -59,16 +51,7 @@ describe('catalog reference data (integration)', () => {
        VALUES ('DUP_SOURCE', 2, false)`,
     );
 
-    await expect(second).rejects.toMatchObject({
-      meta: {
-        driverAdapterError: {
-          cause: {
-            kind: 'UniqueConstraintViolation',
-            originalCode: '23505',
-          },
-        },
-      },
-    });
+    await expect(second).rejects.toMatchObject(uniqueViolation);
   });
 
   it('migrated the documented columns for exchange and data_source', async () => {
