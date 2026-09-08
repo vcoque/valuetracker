@@ -191,7 +191,10 @@ model Session {
 
   /// Set to the successor session when this token is rotated; null while this
   /// is the current token. Self-foreign-key to `session.id`; presenting a
-  /// token whose row has this set is reuse, and revokes the whole chain.
+  /// token whose row has this set is reuse, and revokes the whole chain. The
+  /// relation is `onDelete: Restrict` (Task 8 review carry-in): reuse detection
+  /// reads this pointer, so a successor row must not be deletable while a
+  /// predecessor still references it.
   replacedById String? @map("replaced_by_id") @db.Uuid
 
   issuedAt  DateTime  @default(now()) @map("issued_at")
@@ -205,7 +208,7 @@ model Session {
   ip        String? @db.VarChar(45)
 
   user       User      @relation(fields: [userId], references: [id])
-  replacedBy Session?  @relation("SessionRotation", fields: [replacedById], references: [id])
+  replacedBy Session?  @relation("SessionRotation", fields: [replacedById], references: [id], onDelete: Restrict)
   replaces   Session[] @relation("SessionRotation")
 
   @@map("session")
