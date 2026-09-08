@@ -81,3 +81,83 @@ export const authResponseSchema = z.object({
   refreshToken: z.string().optional(),
 });
 export type AuthResponse = z.infer<typeof authResponseSchema>;
+
+/**
+ * `POST /auth/refresh` request. The refresh token reaches the server by the
+ * transport its `clientType` dictates (`SPEC-identity.md` §"Transport differs
+ * per client"):
+ *
+ *  - `WEB`     -> the `refresh_token` cookie, path-scoped to `/auth/refresh`;
+ *                 `refreshToken` in the body is ignored.
+ *  - `ANDROID` -> `refreshToken` in this body (no cookie jar).
+ *
+ * `clientType` defaults to `WEB`, matching register/login.
+ */
+export const refreshRequestSchema = z.object({
+  refreshToken: z.string().min(1).max(512).optional(), // opaque base64url; bounded to cap work
+  clientType: clientTypeSchema.default('WEB'),
+});
+export type RefreshRequest = z.infer<typeof refreshRequestSchema>;
+export type RefreshRequestInput = z.input<typeof refreshRequestSchema>;
+
+/**
+ * `GET /auth/me` / `PATCH /auth/me` response: the caller's own profile. Carries
+ * no password hash and no tokens -- the credential lives on a separate table
+ * precisely so a user read cannot leak it (`SPEC-identity.md` §user_credential).
+ * `createdAt` is an ISO-8601 string on the wire.
+ */
+export const meResponseSchema = z.object({
+  id: z.string().uuid(),
+  email: z.string().email(),
+  displayName: z.string(),
+  baseCurrencyCode: z.string(),
+  timezone: z.string(),
+  createdAt: z.string(),
+});
+export type MeResponse = z.infer<typeof meResponseSchema>;
+
+/**
+ * `PATCH /auth/me` request. Only these three fields may be changed
+ * (`SPEC-identity.md` §API Surface); `.strict()` makes any other key a 400 --
+ * a client cannot patch its own `email` or `id` through this route. At least
+ * one field must be present, so an empty patch is rejected rather than being a
+ * silent no-op. `baseCurrencyCode` existence is enforced by the database FK to
+ * `currency` (an unknown code is a 400, not a 500).
+ */
+export const updateMeRequestSchema = z
+  .object({
+    displayName: z.string().trim().min(1).max(128),
+    baseCurrencyCode: currencyCodeSchema,
+    timezone: z.string().trim().min(1).max(64),
+  })
+  .partial()
+  .strict()
+  .refine(
+    (patch) =>
+      patch.displayName !== undefined ||
+      patch.baseCurrencyCode !== undefined ||
+      patch.timezone !== undefined,
+    { message: 'at least one of displayName, baseCurrencyCode, timezone is required' },
+  );
+export type UpdateMeRequest = z.infer<typeof updateMeRequestSchema>;
+export type UpdateMeRequestInput = z.input<typeof updateMeRequestSchema>;
+
+/**
+ * One entry in `GET /auth/sessions` -- a logged-in device. `id` is the internal
+ * session id (safe to expose: it is never accepted as a credential). `current`
+ * marks the session the calling access token was minted for. `issuedAt` is an
+ * ISO-8601 string; `lastUserAgent` and `ip` are nullable (they are optional
+ * columns, `SPEC-identity.md` §session).
+ */
+export const sessionSummarySchema = z.object({
+  id: z.string().uuid(),
+  clientType: clientTypeSchema,
+  issuedAt: z.string(),
+  lastUserAgent: z.string().nullable(),
+  ip: z.string().nullable(),
+  current: z.boolean(),
+});
+export type SessionSummary = z.infer<typeof sessionSummarySchema>;
+
+export const sessionsResponseSchema = z.array(sessionSummarySchema);
+export type SessionsResponse = z.infer<typeof sessionsResponseSchema>;
