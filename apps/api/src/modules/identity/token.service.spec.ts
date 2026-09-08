@@ -1,9 +1,12 @@
+import { UnauthorizedException } from '@nestjs/common';
 import {
   calculateJwkThumbprint,
-  generateKeyPair,
+  type CryptoKey,
   exportPKCS8,
+  generateKeyPair,
   importJWK,
   jwtVerify,
+  SignJWT,
 } from 'jose';
 
 import { AppConfig } from '../../shared/config/app-config';
@@ -128,5 +131,140 @@ describe('TokenService', () => {
     const service = new TokenService(config({ nodeEnv: 'production' }));
 
     await expect(service.onModuleInit()).rejects.toThrow(/JWT_PRIVATE_KEY/);
+  });
+
+  /**
+   * `verifyAccessToken` is the whole of `AuthGuard`'s work. It must accept a
+   * token this service minted and turn EVERY other input -- forged, expired,
+   * wrong issuer, malformed -- into a 401, never a 500 (Ruling S12,
+   * SPEC-identity.md AC "an expired or revoked session returns 401, never
+   * 500"). These run with a KNOWN imported key so a forgery can be signed with
+   * the real key where the point is to exercise a claim/`kid` check rather than
+   * the signature.
+   */
+  describe('verifyAccessToken', () => {
+    const ISS = 'valuetracker';
+    const AUD = 'valuetracker-api';
+
+    let service: TokenService;
+    let realKid: string;
+    // The real signing key (matches `service`), and a second, unrelated key.
+    let realPrivateKey: CryptoKey;
+    let otherPrivateKey: CryptoKey;
+
+    const nowSeconds = (): number => Math.floor(Date.now() / 1000);
+
+    /** Sign a payload as this service would: EdDSA, real key, real `kid`. */
+    const signWithRealKey = (
+      payload: Record<string, unknown>,
+      header: Record<string, unknown> = {},
+    ): Promise<string> =>
+      new SignJWT(payload)
+        .setProtectedHeader({ alg: 'EdDSA', kid: realKid, ...header })
+        .sign(realPrivateKey);
+
+    const validClaims = (): Record<string, unknown> => ({
+      sub: 'user-1',
+      sid: 'session-1',
+      iat: nowSeconds(),
+      exp: nowSeconds() + 900,
+      iss: ISS,
+      aud: AUD,
+    });
+
+    const expectRejected = async (token: string): Promise<void> => {
+      await expect(service.verifyAccessToken(token)).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
+      await service.verifyAccessToken(token).catch((error: unknown) => {
+        expect((error as UnauthorizedException).getStatus()).toBe(401);
+      });
+    };
+
+    beforeEach(async () => {
+      const real = await generateKeyPair('EdDSA', { extractable: true });
+      const other = await generateKeyPair('EdDSA', { extractable: true });
+      realPrivateKey = real.privateKey;
+      otherPrivateKey = other.privateKey;
+
+      const base64 = Buffer.from(
+        await exportPKCS8(real.privateKey),
+        'utf8',
+      ).toString('base64');
+      service = new TokenService(
+        config({ jwtPrivateKey: base64, nodeEnv: 'production' }),
+      );
+      await service.onModuleInit();
+      realKid = service.getPublicJwk().kid;
+    });
+
+    it('accepts a token it just issued and returns sub / sid', async () => {
+      const { token } = await service.issueAccessToken({
+        userId: 'user-9',
+        sessionId: 'session-9',
+      });
+
+      await expect(service.verifyAccessToken(token)).resolves.toEqual({
+        sub: 'user-9',
+        sid: 'session-9',
+      });
+    });
+
+    it('rejects a garbage string', async () => {
+      await expectRejected('not-a-jwt');
+      await expectRejected('a.b.c');
+    });
+
+    it('rejects an unsigned `alg: none` token forged with the real claims', async () => {
+      const header = Buffer.from(
+        JSON.stringify({ alg: 'none', kid: realKid }),
+        'utf8',
+      ).toString('base64url');
+      const body = Buffer.from(
+        JSON.stringify(validClaims()),
+        'utf8',
+      ).toString('base64url');
+
+      await expectRejected(`${header}.${body}.`);
+    });
+
+    it('rejects a token signed with a different Ed25519 key', async () => {
+      const token = await new SignJWT(validClaims())
+        .setProtectedHeader({ alg: 'EdDSA', kid: realKid })
+        .sign(otherPrivateKey);
+
+      await expectRejected(token);
+    });
+
+    it('rejects a token whose `kid` is not the current signing key', async () => {
+      const token = await signWithRealKey(validClaims(), { kid: 'unknown-kid' });
+
+      await expectRejected(token);
+    });
+
+    it('rejects an expired token even with a valid signature', async () => {
+      const token = await signWithRealKey({
+        ...validClaims(),
+        iat: nowSeconds() - 1000,
+        exp: nowSeconds() - 100,
+      });
+
+      await expectRejected(token);
+    });
+
+    it('rejects a token minted for another issuer or audience', async () => {
+      await expectRejected(
+        await signWithRealKey({ ...validClaims(), iss: 'evil-issuer' }),
+      );
+      await expectRejected(
+        await signWithRealKey({ ...validClaims(), aud: 'evil-audience' }),
+      );
+    });
+
+    it('rejects a signature-valid token that is missing `sid`', async () => {
+      const { sid: _sid, ...noSid } = validClaims();
+
+      await expectRejected(await signWithRealKey(noSid));
+    });
   });
 });

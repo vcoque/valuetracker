@@ -32,3 +32,20 @@ export function serializeRefreshCookie(token: string): string {
     `Max-Age=${maxAgeSeconds}`,
   ].join('; ');
 }
+
+/**
+ * The same cookie with an empty value and `Max-Age=0`, so the browser drops it
+ * -- used by `POST /auth/logout` and `/auth/logout-all`. Name, `Path` and the
+ * attributes must match {@link serializeRefreshCookie} exactly or the browser
+ * keeps the original alongside this one.
+ */
+export function serializeClearedRefreshCookie(): string {
+  return [
+    `${REFRESH_COOKIE_NAME}=`,
+    'HttpOnly',
+    'Secure',
+    'SameSite=Strict',
+    `Path=${REFRESH_COOKIE_PATH}`,
+    'Max-Age=0',
+  ].join('; ');
+}

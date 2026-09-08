@@ -1,4 +1,9 @@
-import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  type OnModuleInit,
+  UnauthorizedException,
+} from '@nestjs/common';
 import {
   type CryptoKey,
   type JWK,
@@ -7,7 +12,9 @@ import {
   calculateJwkThumbprint,
   exportJWK,
   generateKeyPair,
+  importJWK,
   importPKCS8,
+  jwtVerify,
 } from 'jose';
 
 type SigningKey = CryptoKey | KeyObject;
@@ -33,6 +40,14 @@ export interface IssueAccessTokenInput {
   readonly sessionId: string;
 }
 
+/** What a verified access token yields: the two identifier claims, nothing else. */
+export interface VerifiedAccessToken {
+  /** `sub` -- the user id. */
+  readonly sub: string;
+  /** `sid` -- the session id. */
+  readonly sid: string;
+}
+
 /**
  * Mints EdDSA access tokens and owns the signing key.
  *
@@ -53,6 +68,7 @@ export class TokenService implements OnModuleInit {
   private readonly logger = new Logger(TokenService.name);
 
   private signingKey!: SigningKey;
+  private verificationKey!: SigningKey;
   private kid!: string;
   private publicJwk!: JWK;
 
@@ -69,6 +85,13 @@ export class TokenService implements OnModuleInit {
     const { d: _private, ...publicJwk } = jwk;
     this.publicJwk = publicJwk;
     this.kid = await calculateJwkThumbprint(publicJwk);
+
+    // Import the public key once, here, so `verifyAccessToken` on the request
+    // path is a pure signature check with no per-call key parsing.
+    this.verificationKey = (await importJWK(
+      publicJwk,
+      SIGNING_ALG,
+    )) as SigningKey;
   }
 
   private async resolveSigningKey(): Promise<SigningKey> {
@@ -135,5 +158,59 @@ export class TokenService implements OnModuleInit {
    */
   getPublicJwk(): { kid: string; jwk: JWK } {
     return { kid: this.kid, jwk: this.publicJwk };
+  }
+
+  /**
+   * Verify a Bearer access token and return its `sub` / `sid`. Used by
+   * `AuthGuard` on every authenticated request.
+   *
+   * The algorithm is pinned to a one-entry allow-list (`['EdDSA']`) and the
+   * token's own `alg` header is NEVER consulted -- this is what defeats an
+   * `alg: none` forgery and an algorithm-confusion downgrade. `iss` and `aud`
+   * are checked so a token minted for another deployment does not verify here,
+   * and `exp` is enforced by `jwtVerify`. `kid` must name the current signing
+   * key: with a single key that makes an unknown-`kid` token an explicit
+   * reject; when key rotation lands this becomes a JWKS lookup over several
+   * valid `kid`s.
+   *
+   * Every failure mode -- malformed input, bad signature, `alg: none`, unknown
+   * `kid`, wrong `iss`/`aud`, expiry, a payload missing `sub`/`sid` -- is
+   * funnelled into a single {@link UnauthorizedException}. No `jose` error is
+   * allowed to propagate: unwrapped it would surface as a 500, and its message
+   * can quote token bytes into a log line.
+   */
+  async verifyAccessToken(token: string): Promise<VerifiedAccessToken> {
+    try {
+      const { payload, protectedHeader } = await jwtVerify(
+        token,
+        this.verificationKey,
+        {
+          algorithms: [SIGNING_ALG],
+          issuer: this.config.jwtIssuer,
+          audience: this.config.jwtAudience,
+        },
+      );
+
+      if (protectedHeader.kid !== this.kid) {
+        throw new UnauthorizedException({ message: 'Invalid access token' });
+      }
+
+      const { sub, sid } = payload;
+      if (
+        typeof sub !== 'string' ||
+        sub.length === 0 ||
+        typeof sid !== 'string' ||
+        sid.length === 0
+      ) {
+        throw new UnauthorizedException({ message: 'Invalid access token' });
+      }
+
+      return { sub, sid };
+    } catch (error) {
+      if (error instanceof UnauthorizedException) {
+        throw error;
+      }
+      throw new UnauthorizedException({ message: 'Invalid access token' });
+    }
   }
 }

@@ -7,7 +7,14 @@ import {
 import { Prisma } from '@prisma/client';
 
 import { PrismaService } from '../../shared/prisma/prisma.service';
-import type { ClientTypeContract, LoginRequest, RegisterRequest } from './dto/auth.dto';
+import type {
+  ClientTypeContract,
+  LoginRequest,
+  MeResponse,
+  RegisterRequest,
+  SessionSummary,
+  UpdateMeRequest,
+} from './dto/auth.dto';
 import {
   hashPassword,
   PASSWORD_ALGORITHM,
@@ -37,6 +44,17 @@ export const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** The same generic 401 for every login failure -- no user enumeration. */
 const INVALID_CREDENTIALS_MESSAGE = 'Invalid email or password';
+
+/**
+ * The one 401 for every `/auth/refresh` rejection -- unknown token, expired
+ * session, revoked session, or a replayed (already-rotated) token. A caller
+ * learns only "re-authenticate", never which case it hit.
+ */
+const REFRESH_REJECTED_MESSAGE = 'Invalid refresh token';
+
+/** Shared by register's collision path and `PATCH /auth/me` -- an FK miss on
+ * `base_currency_code` is a client error, not a server fault. */
+const UNKNOWN_CURRENCY_MESSAGE = 'Unknown base currency code';
 
 /** The generic 409 for a duplicate registration -- never echoes the email. */
 const REGISTRATION_CONFLICT_MESSAGE = 'Registration could not be completed';
@@ -129,7 +147,7 @@ export class IdentityService {
           JSON.stringify(error.meta ?? {}).includes('base_currency_code')
         ) {
           throw new BadRequestException({
-            message: 'Unknown base currency code',
+            message: UNKNOWN_CURRENCY_MESSAGE,
           });
         }
       }
@@ -206,5 +224,228 @@ export class IdentityService {
       refreshTokenExpiresAt: expiresAt,
       clientType,
     };
+  }
+
+  /**
+   * Exchange a refresh token for a new access + refresh pair, rotating the
+   * presented token (ADR 0003, `SPEC-identity.md` §Authentication Design).
+   *
+   * Rotation, in one transaction: a fresh `session` row is created (new token,
+   * new hash, same `client_type`), and the presented row is marked
+   * `revoked_at = now` with `replaced_by_id` pointing at the successor. The
+   * conditional `updateMany` (`replacedById: null, revokedAt: null`) is what
+   * makes two concurrent refreshes of the same token safe -- only one wins the
+   * rotation; the loser's transaction rolls back and it gets a 401.
+   *
+   * **Reuse detection.** A token whose row already has `replaced_by_id` set has
+   * been rotated before -- it should not exist on any client -- so presenting
+   * it is treated as theft: every still-live session for that user is revoked
+   * ("the entire chain for that user", `SPEC-identity.md`), forcing a full
+   * re-authentication on every device. Returns the same generic 401.
+   *
+   * An unknown, expired or already-revoked token is a plain 401 with no side
+   * effect.
+   */
+  async refresh(
+    presentedToken: string,
+    context: SessionContext,
+  ): Promise<IssuedSession> {
+    const session = await this.prisma.session.findUnique({
+      where: { tokenHash: hashRefreshToken(presentedToken) },
+      select: {
+        id: true,
+        userId: true,
+        clientType: true,
+        replacedById: true,
+        revokedAt: true,
+        expiresAt: true,
+      },
+    });
+
+    if (!session) {
+      throw new UnauthorizedException({ message: REFRESH_REJECTED_MESSAGE });
+    }
+
+    const now = new Date();
+
+    if (session.replacedById !== null) {
+      // Replay of a rotated token -> revoke the whole chain for this user.
+      await this.prisma.$transaction([
+        this.prisma.session.updateMany({
+          where: { userId: session.userId, revokedAt: null },
+          data: { revokedAt: now },
+        }),
+      ]);
+      throw new UnauthorizedException({ message: REFRESH_REJECTED_MESSAGE });
+    }
+
+    if (session.revokedAt !== null || session.expiresAt <= now) {
+      throw new UnauthorizedException({ message: REFRESH_REJECTED_MESSAGE });
+    }
+
+    const rawRefreshToken = generateRefreshToken();
+    const expiresAt = new Date(now.getTime() + REFRESH_TOKEN_TTL_MS);
+
+    const successor = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.session.create({
+        data: {
+          userId: session.userId,
+          tokenHash: hashRefreshToken(rawRefreshToken),
+          clientType: session.clientType,
+          issuedAt: now,
+          expiresAt,
+          userAgent: context.userAgent?.slice(0, 255) ?? null,
+          ip: context.ip,
+        },
+        select: { id: true },
+      });
+
+      const rotated = await tx.session.updateMany({
+        where: { id: session.id, replacedById: null, revokedAt: null },
+        data: { revokedAt: now, replacedById: created.id },
+      });
+
+      if (rotated.count !== 1) {
+        // Lost a race with a concurrent refresh of the same token; roll back.
+        throw new UnauthorizedException({ message: REFRESH_REJECTED_MESSAGE });
+      }
+
+      return created;
+    });
+
+    const access = await this.tokens.issueAccessToken({
+      userId: session.userId,
+      sessionId: successor.id,
+    });
+
+    return {
+      accessToken: access.token,
+      expiresIn: access.expiresIn,
+      refreshToken: rawRefreshToken,
+      refreshTokenExpiresAt: expiresAt,
+      clientType: session.clientType,
+    };
+  }
+
+  /** Revoke a single session (the caller's current one). Idempotent. */
+  async logout(sessionId: string): Promise<void> {
+    await this.prisma.session.updateMany({
+      where: { id: sessionId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+  }
+
+  /**
+   * Revoke every still-live session for the user, not just the caller's
+   * (`SPEC-identity.md` AC). A second device's refresh token stops working at
+   * once; its access token lapses within 15 minutes.
+   */
+  async logoutAll(userId: string): Promise<void> {
+    await this.prisma.session.updateMany({
+      where: { userId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+  }
+
+  /** The caller's own profile -- no hash, no tokens (`meResponseSchema`). */
+  async getProfile(userId: string): Promise<MeResponse> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        displayName: true,
+        baseCurrencyCode: true,
+        timezone: true,
+        createdAt: true,
+      },
+    });
+
+    if (!user) {
+      // A signed token for a user that no longer exists -- treat as unauthenticated.
+      throw new UnauthorizedException({ message: 'Invalid access token' });
+    }
+
+    return { ...user, createdAt: user.createdAt.toISOString() };
+  }
+
+  /**
+   * Update the three mutable profile fields. The schema (`updateMeRequestSchema`,
+   * `.strict()`) has already rejected any other key with a 400; this only has to
+   * turn an unknown `base_currency_code` (FK miss, `P2003`) into a 400 rather
+   * than a 500, the same way `register` does.
+   */
+  async updateProfile(
+    userId: string,
+    patch: UpdateMeRequest,
+  ): Promise<MeResponse> {
+    try {
+      const user = await this.prisma.user.update({
+        where: { id: userId },
+        data: {
+          ...(patch.displayName !== undefined && {
+            displayName: patch.displayName,
+          }),
+          ...(patch.baseCurrencyCode !== undefined && {
+            baseCurrencyCode: patch.baseCurrencyCode,
+          }),
+          ...(patch.timezone !== undefined && { timezone: patch.timezone }),
+        },
+        select: {
+          id: true,
+          email: true,
+          displayName: true,
+          baseCurrencyCode: true,
+          timezone: true,
+          createdAt: true,
+        },
+      });
+
+      return { ...user, createdAt: user.createdAt.toISOString() };
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError) {
+        if (
+          error.code === 'P2003' &&
+          JSON.stringify(error.meta ?? {}).includes('base_currency_code')
+        ) {
+          throw new BadRequestException({ message: UNKNOWN_CURRENCY_MESSAGE });
+        }
+        if (error.code === 'P2025') {
+          throw new UnauthorizedException({ message: 'Invalid access token' });
+        }
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * The user's active (non-revoked, non-expired) sessions for a "signed-in
+   * devices" view. `current` marks the session the calling access token was
+   * minted for.
+   */
+  async listSessions(
+    userId: string,
+    currentSessionId: string,
+  ): Promise<SessionSummary[]> {
+    const rows = await this.prisma.session.findMany({
+      where: { userId, revokedAt: null, expiresAt: { gt: new Date() } },
+      orderBy: { issuedAt: 'desc' },
+      select: {
+        id: true,
+        clientType: true,
+        issuedAt: true,
+        userAgent: true,
+        ip: true,
+      },
+    });
+
+    return rows.map((row) => ({
+      id: row.id,
+      clientType: row.clientType,
+      issuedAt: row.issuedAt.toISOString(),
+      lastUserAgent: row.userAgent,
+      ip: row.ip,
+      current: row.id === currentSessionId,
+    }));
   }
 }

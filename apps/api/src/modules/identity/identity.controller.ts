@@ -1,38 +1,55 @@
 import {
   Body,
   Controller,
+  Get,
   HttpCode,
   HttpStatus,
+  Patch,
   Post,
   Req,
   Res,
+  UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
 
 import { RateLimit, RateLimitGuard } from '../../shared/http/rate-limit.guard';
 import { ZodValidationPipe } from '../../shared/http/zod-validation.pipe';
+import { AuthGuard } from './auth.guard';
+import { CurrentUser } from './current-user.decorator';
 import {
   type AuthResponse,
   type LoginRequest,
   loginRequestSchema,
+  type MeResponse,
+  type RefreshRequest,
+  refreshRequestSchema,
   type RegisterRequest,
   registerRequestSchema,
+  type SessionSummary,
+  type UpdateMeRequest,
+  updateMeRequestSchema,
 } from './dto/auth.dto';
 import {
   IdentityService,
   type IssuedSession,
   type SessionContext,
 } from './identity.service';
-import { serializeRefreshCookie } from './refresh-cookie';
+import {
+  REFRESH_COOKIE_NAME,
+  serializeClearedRefreshCookie,
+  serializeRefreshCookie,
+} from './refresh-cookie';
 
 /**
  * Minimal structural views of the Fastify request/reply -- only the members the
  * controller touches. Avoids a source dependency on `fastify` (a transitive
- * package) while keeping the handler typed.
+ * package) while keeping the handler typed. `cookies` is populated by
+ * `@fastify/cookie`, registered in `main.ts` and every e2e app setup.
  */
 interface RequestView {
   readonly ip?: string;
   readonly headers: Record<string, string | string[] | undefined>;
+  readonly cookies?: Record<string, string | undefined>;
 }
 
 interface ReplyView {
@@ -42,11 +59,14 @@ interface ReplyView {
 /**
  * Rate limits (Ruling S10). Tunable. Register is tighter than login because an
  * open-signup endpoint on the public internet is the more attractive target for
- * enumeration and automated abuse (SPEC-identity.md last AC).
+ * enumeration and automated abuse (SPEC-identity.md last AC). `/auth/refresh`
+ * is limited too -- it is reachable without an access token. The
+ * `AuthGuard`-protected routes are not IP-limited: a valid token is the gate.
  */
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const REGISTER_RATE_LIMIT = 5;
 const LOGIN_RATE_LIMIT = 10;
+const REFRESH_RATE_LIMIT = 30;
 
 @Controller('auth')
 @UseGuards(RateLimitGuard)
@@ -75,6 +95,78 @@ export class IdentityController {
   ): Promise<AuthResponse> {
     const issued = await this.identity.login(body, contextOf(request));
     return transportFor(issued, reply);
+  }
+
+  /**
+   * Exchange a refresh token for a new pair, rotating it. WEB presents the token
+   * in the `refresh_token` cookie; ANDROID in the body. The response transport
+   * follows the *session's* recorded `client_type`, not the request.
+   */
+  @Post('refresh')
+  @HttpCode(HttpStatus.OK)
+  @RateLimit({ limit: REFRESH_RATE_LIMIT, windowMs: RATE_LIMIT_WINDOW_MS })
+  async refresh(
+    @Body(new ZodValidationPipe(refreshRequestSchema)) body: RefreshRequest,
+    @Req() request: RequestView,
+    @Res({ passthrough: true }) reply: ReplyView,
+  ): Promise<AuthResponse> {
+    const presented =
+      body.clientType === 'ANDROID'
+        ? body.refreshToken
+        : request.cookies?.[REFRESH_COOKIE_NAME];
+
+    if (!presented) {
+      throw new UnauthorizedException({ message: 'Invalid refresh token' });
+    }
+
+    const issued = await this.identity.refresh(presented, contextOf(request));
+    return transportFor(issued, reply);
+  }
+
+  @Post('logout')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @UseGuards(AuthGuard)
+  async logout(
+    @CurrentUser('sessionId') sessionId: string,
+    @Res({ passthrough: true }) reply: ReplyView,
+  ): Promise<void> {
+    await this.identity.logout(sessionId);
+    reply.header('set-cookie', serializeClearedRefreshCookie());
+  }
+
+  @Post('logout-all')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @UseGuards(AuthGuard)
+  async logoutAll(
+    @CurrentUser() userId: string,
+    @Res({ passthrough: true }) reply: ReplyView,
+  ): Promise<void> {
+    await this.identity.logoutAll(userId);
+    reply.header('set-cookie', serializeClearedRefreshCookie());
+  }
+
+  @Get('me')
+  @UseGuards(AuthGuard)
+  me(@CurrentUser() userId: string): Promise<MeResponse> {
+    return this.identity.getProfile(userId);
+  }
+
+  @Patch('me')
+  @UseGuards(AuthGuard)
+  updateMe(
+    @CurrentUser() userId: string,
+    @Body(new ZodValidationPipe(updateMeRequestSchema)) body: UpdateMeRequest,
+  ): Promise<MeResponse> {
+    return this.identity.updateProfile(userId, body);
+  }
+
+  @Get('sessions')
+  @UseGuards(AuthGuard)
+  sessions(
+    @CurrentUser() userId: string,
+    @CurrentUser('sessionId') sessionId: string,
+  ): Promise<SessionSummary[]> {
+    return this.identity.listSessions(userId, sessionId);
   }
 }
 

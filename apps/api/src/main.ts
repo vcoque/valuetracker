@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 
+import fastifyCookie from '@fastify/cookie';
 import { NestFactory } from '@nestjs/core';
 import {
   FastifyAdapter,
@@ -23,6 +24,11 @@ async function bootstrap(): Promise<void> {
     AppModule,
     new FastifyAdapter(),
   );
+
+  // `POST /auth/refresh` reads the WEB refresh token from the `refresh_token`
+  // cookie; this plugin is what populates `request.cookies`. Registered with no
+  // secret -- the cookie is never signed here, only read (ADR 0003).
+  await app.register(fastifyCookie);
 
   // Without this, SIGTERM kills the process outright and no provider's
   // onModuleDestroy runs -- the database pool is dropped rather than closed,
