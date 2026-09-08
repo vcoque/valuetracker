@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   UnauthorizedException,
@@ -28,7 +29,7 @@ import { TokenService } from './token.service';
  *     hash('...', {algorithm:Algorithm.Argon2id,memoryCost:19456,timeCost:2,parallelism:1}) \
  *     .then(console.log)"
  */
-const DUMMY_ARGON2ID_HASH =
+export const DUMMY_ARGON2ID_HASH =
   '$argon2id$v=19$m=19456,t=2,p=1$3FEGafhbaWHdP0z870J4yA$Ug4xLIj0eyjiRfN8yH++TJ5bN+B80chuRcbPzYVG3FQ';
 
 /** Refresh-token lifetime: 30 days absolute, no sliding window (ADR 0003). */
@@ -111,13 +112,26 @@ export class IdentityService {
       });
       userId = user.id;
     } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2002'
-      ) {
-        throw new ConflictException({
-          message: REGISTRATION_CONFLICT_MESSAGE,
-        });
+      if (error instanceof Prisma.PrismaClientKnownRequestError) {
+        if (error.code === 'P2002') {
+          throw new ConflictException({
+            message: REGISTRATION_CONFLICT_MESSAGE,
+          });
+        }
+        // The only foreign key a client controls on the user insert is
+        // `base_currency_code` -> `currency.code`; `currencyCodeSchema` accepts
+        // any AAA..ZZZ but only seeded codes exist. SPEC-identity.md AC:
+        // "base_currency_code is validated against the currency table and
+        // rejects unknown codes". A currency code is not user-identifying, so a
+        // specific 400 leaks nothing.
+        if (
+          error.code === 'P2003' &&
+          JSON.stringify(error.meta ?? {}).includes('base_currency_code')
+        ) {
+          throw new BadRequestException({
+            message: 'Unknown base currency code',
+          });
+        }
       }
       throw error;
     }

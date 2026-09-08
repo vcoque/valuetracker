@@ -76,7 +76,15 @@ export class TokenService implements OnModuleInit {
       const pem = Buffer.from(this.config.jwtPrivateKey, 'base64').toString(
         'utf8',
       );
-      return importPKCS8(pem, SIGNING_ALG, { extractable: true });
+      try {
+        return await importPKCS8(pem, SIGNING_ALG, { extractable: true });
+      } catch {
+        // Swallow jose's parse error -- it can quote the surrounding key
+        // material into the boot log. A static message is enough to act on.
+        throw new Error(
+          'JWT_PRIVATE_KEY is not a valid base64-encoded PKCS#8 Ed25519 private key',
+        );
+      }
     }
 
     if (this.config.nodeEnv === 'production') {

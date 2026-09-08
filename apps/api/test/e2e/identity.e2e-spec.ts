@@ -230,6 +230,35 @@ describe('identity auth endpoints (e2e)', () => {
     expect(JSON.stringify(response.body)).not.toContain('short');
   });
 
+  it('rejects a syntactically valid but unseeded base currency code with 400', async () => {
+    const response = await request(app.getHttpServer())
+      .post('/auth/register')
+      .send({
+        email: 'gbp@example.com',
+        password,
+        displayName: 'Sterling Person',
+        baseCurrencyCode: 'GBP', // valid /^[A-Z]{3}$/, but only BRL/USD/EUR are seeded
+        clientType: 'WEB',
+      });
+
+    expect(response.status).toBe(400);
+    expect(JSON.stringify(response.body)).toContain('Unknown base currency code');
+  });
+
+  it('sets Cache-Control: no-store on a token-bearing response', async () => {
+    const response = await request(app.getHttpServer())
+      .post('/auth/register')
+      .send({
+        email: 'nostore@example.com',
+        password,
+        displayName: 'No Store Person',
+        clientType: 'ANDROID',
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.headers['cache-control']).toBe('no-store');
+  });
+
   it('returns the same generic 401 for a wrong password and an unknown email', async () => {
     await request(app.getHttpServer()).post('/auth/register').send({
       email: 'real@example.com',
@@ -268,5 +297,56 @@ describe('identity auth endpoints (e2e)', () => {
       message: 'Registration could not be completed',
     });
     expect(JSON.stringify(response.body)).not.toContain('twice@example.com');
+  });
+});
+
+/**
+ * The per-IP `RateLimitGuard` is left LIVE here (no `.overrideGuard`) so this
+ * proves the guard is actually wired to `/auth/register` -- a dropped
+ * `@UseGuards`, a mis-typed `RATE_LIMIT_METADATA` key or a bad decorator order
+ * would make every other test still pass while the auth routes ran unlimited
+ * (`SPEC-identity.md` AC: "rate-limited per IP … first-slice, not hardening").
+ */
+describe('identity auth endpoints — rate limiting (e2e)', () => {
+  let app: NestFastifyApplication;
+
+  beforeAll(async () => {
+    const moduleRef = await Test.createTestingModule({
+      imports: [AppModule],
+    }).compile();
+
+    app = moduleRef.createNestApplication<NestFastifyApplication>(
+      new FastifyAdapter(),
+    );
+    await app.init();
+    await app.getHttpAdapter().getInstance().ready();
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  beforeEach(async () => {
+    // `integration-setup.ts` truncates every table before each test.
+    await seedReferenceData(app.get(PrismaService));
+  });
+
+  it('answers 429 once /auth/register is hit past its per-IP limit', async () => {
+    // Configured limit is 5 / IP / 60s; the 6th call from this client is over.
+    const statuses: number[] = [];
+    for (let i = 0; i < 6; i++) {
+      const response = await request(app.getHttpServer())
+        .post('/auth/register')
+        .send({
+          email: `flood-${i}@example.com`,
+          password: 'a-sufficiently-long-password',
+          displayName: `Flood ${i}`,
+          clientType: 'ANDROID',
+        });
+      statuses.push(response.status);
+    }
+
+    expect(statuses.slice(0, 5)).toEqual([201, 201, 201, 201, 201]);
+    expect(statuses[5]).toBe(429);
   });
 });

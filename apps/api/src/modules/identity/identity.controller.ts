@@ -92,6 +92,10 @@ function contextOf(request: RequestView): SessionContext {
  * tokens travel in the body.
  */
 function transportFor(issued: IssuedSession, reply: ReplyView): AuthResponse {
+  // The response carries tokens; no cache, shared or private, may keep it
+  // (RFC 6749 §5.1).
+  reply.header('cache-control', 'no-store');
+
   const body: AuthResponse = {
     accessToken: issued.accessToken,
     tokenType: 'Bearer',

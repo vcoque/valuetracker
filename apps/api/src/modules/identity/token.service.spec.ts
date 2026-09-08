@@ -1,4 +1,10 @@
-import { generateKeyPair, exportPKCS8, importJWK, jwtVerify } from 'jose';
+import {
+  calculateJwkThumbprint,
+  generateKeyPair,
+  exportPKCS8,
+  importJWK,
+  jwtVerify,
+} from 'jose';
 
 import { AppConfig } from '../../shared/config/app-config';
 import { TokenService } from './token.service';
@@ -35,10 +41,12 @@ describe('TokenService', () => {
       audience: 'valuetracker-api',
     });
 
+    const { kid, jwk: publicJwk } = service.getPublicJwk();
     expect(protectedHeader.alg).toBe('EdDSA');
-    expect(protectedHeader.kid).toBe(service.getPublicJwk().kid);
-    expect(protectedHeader.kid).toEqual(expect.any(String));
-    expect((protectedHeader.kid ?? '').length).toBeGreaterThan(0);
+    expect(protectedHeader.kid).toBe(kid);
+    // `kid` must be the actual RFC 7638 thumbprint, not just a non-empty
+    // string -- Task 10's JWKS lookup keys on it.
+    expect(kid).toBe(await calculateJwkThumbprint(publicJwk));
     expect(payload.sub).toBe('user-1');
     expect(payload.sid).toBe('session-1');
   });
@@ -101,6 +109,19 @@ describe('TokenService', () => {
         audience: 'valuetracker-api',
       }),
     ).resolves.toBeDefined();
+  });
+
+  it('fails with a static message (no key material) when JWT_PRIVATE_KEY is malformed', async () => {
+    const service = new TokenService(
+      config({
+        jwtPrivateKey: Buffer.from('-----BEGIN PRIVATE KEY-----\nnope\n', 'utf8').toString('base64'),
+        nodeEnv: 'production',
+      }),
+    );
+
+    await expect(service.onModuleInit()).rejects.toThrow(
+      'JWT_PRIVATE_KEY is not a valid base64-encoded PKCS#8 Ed25519 private key',
+    );
   });
 
   it('refuses to boot in production with no signing key', async () => {
