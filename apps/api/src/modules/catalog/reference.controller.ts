@@ -1,5 +1,6 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, UseGuards } from '@nestjs/common';
 
+import { AuthGuard } from '../identity/auth.guard';
 import {
   type CurrencyView,
   type ExchangeView,
@@ -10,12 +11,12 @@ import {
  * Reference-data endpoints for the `catalog` module: the currencies and
  * exchanges everything else is denominated in and traded on.
  *
- * TODO(Task 10): @UseGuards(AuthGuard) once identity lands. SPEC-catalog.md
- * marks these routes "Auth: Yes", but `AuthGuard` does not exist until Task 10
- * (identity is Phase 1), so for the Phase 0 walking skeleton they ship
- * unauthenticated. The guard is added here in Task 10 or Task 13.
+ * `SPEC-catalog.md` §API Surface marks both routes "Auth: Yes" (Ruling S4):
+ * every read is scoped to an authenticated caller. `AuthGuard` comes from
+ * `IdentityModule`, which `CatalogModule` imports.
  */
 @Controller()
+@UseGuards(AuthGuard)
 export class ReferenceController {
   constructor(private readonly referenceService: ReferenceService) {}
 

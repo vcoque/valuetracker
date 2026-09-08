@@ -7,6 +7,7 @@ import request from 'supertest';
 
 import { seedReferenceData } from '../../prisma/seed';
 import { AppModule } from '../../src/app.module';
+import { RateLimitGuard } from '../../src/shared/http/rate-limit.guard';
 import { PrismaService } from '../../src/shared/prisma/prisma.service';
 
 /**
@@ -15,14 +16,34 @@ import { PrismaService } from '../../src/shared/prisma/prisma.service';
  * database. The rows come from the same `seedReferenceData` that `prisma db
  * seed` runs; `integration-setup.ts` truncates between tests, so it runs before
  * each one.
+ *
+ * Ruling S4: both routes are `Auth: Yes` (`SPEC-catalog.md` §API Surface), so
+ * every read needs a Bearer access token from `identity`. The per-IP
+ * `RateLimitGuard` is stubbed so the throwaway registrations this suite makes
+ * do not trip the limiter.
  */
 describe('catalog reference endpoints (e2e)', () => {
   let app: NestFastifyApplication;
 
+  const bearer = async (): Promise<string> => {
+    const response = await request(app.getHttpServer())
+      .post('/auth/register')
+      .send({
+        email: `catalog-${Date.now()}-${Math.random().toString(36).slice(2)}@example.com`,
+        password: 'a-sufficiently-long-password',
+        displayName: 'Catalog Reader',
+        clientType: 'ANDROID',
+      });
+    return (response.body as { accessToken: string }).accessToken;
+  };
+
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule],
-    }).compile();
+    })
+      .overrideGuard(RateLimitGuard)
+      .useValue({ canActivate: () => true })
+      .compile();
 
     app = moduleRef.createNestApplication<NestFastifyApplication>(
       new FastifyAdapter(),
@@ -39,8 +60,24 @@ describe('catalog reference endpoints (e2e)', () => {
     await seedReferenceData(app.get(PrismaService));
   });
 
-  it('GET /currencies returns the seeded currencies', async () => {
+  it('GET /currencies rejects a request with no access token (401)', async () => {
     const response = await request(app.getHttpServer()).get('/currencies');
+
+    expect(response.status).toBe(401);
+  });
+
+  it('GET /exchanges rejects a request with no access token (401)', async () => {
+    const response = await request(app.getHttpServer()).get('/exchanges');
+
+    expect(response.status).toBe(401);
+  });
+
+  it('GET /currencies returns the seeded currencies for an authenticated caller', async () => {
+    const token = await bearer();
+
+    const response = await request(app.getHttpServer())
+      .get('/currencies')
+      .set('Authorization', `Bearer ${token}`);
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual([
@@ -50,8 +87,12 @@ describe('catalog reference endpoints (e2e)', () => {
     ]);
   });
 
-  it('GET /exchanges returns the seeded exchanges', async () => {
-    const response = await request(app.getHttpServer()).get('/exchanges');
+  it('GET /exchanges returns the seeded exchanges for an authenticated caller', async () => {
+    const token = await bearer();
+
+    const response = await request(app.getHttpServer())
+      .get('/exchanges')
+      .set('Authorization', `Bearer ${token}`);
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual([
