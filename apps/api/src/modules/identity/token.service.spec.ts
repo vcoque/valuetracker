@@ -172,14 +172,12 @@ describe('TokenService', () => {
       aud: AUD,
     });
 
-    const expectRejected = async (token: string): Promise<void> => {
-      await expect(service.verifyAccessToken(token)).rejects.toBeInstanceOf(
+    // `UnauthorizedException` is always HTTP 401, so asserting the instance is
+    // the whole assertion -- there is no 500 path to distinguish.
+    const expectRejected = (token: string): Promise<void> =>
+      expect(service.verifyAccessToken(token)).rejects.toBeInstanceOf(
         UnauthorizedException,
       );
-      await service.verifyAccessToken(token).catch((error: unknown) => {
-        expect((error as UnauthorizedException).getStatus()).toBe(401);
-      });
-    };
 
     beforeEach(async () => {
       const real = await generateKeyPair('EdDSA', { extractable: true });

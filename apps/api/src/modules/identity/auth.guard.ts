@@ -1,11 +1,15 @@
 import {
   type CanActivate,
   type ExecutionContext,
+  Inject,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
 
-import { TokenService } from './token.service';
+import {
+  ACCESS_TOKEN_VERIFIER,
+  type AccessTokenVerifier,
+} from './token.service';
 
 /**
  * What `AuthGuard` attaches to the request once a Bearer token verifies. Other
@@ -38,12 +42,19 @@ export interface AuthenticatedRequest {
  * at the next refresh, which fails at once.
  *
  * Every rejection -- no header, malformed header, expired, bad signature,
- * `alg: none`, unknown `kid`, wrong `iss`/`aud` -- is a 401. `TokenService`
+ * `alg: none`, unknown `kid`, wrong `iss`/`aud` -- is a 401. The verifier
  * wraps every `jose` error, so nothing here can 500.
+ *
+ * It depends on {@link AccessTokenVerifier} (bound to the `identity`
+ * `TokenService`), not the class -- so `issueAccessToken` never leaves the
+ * module, and a consumer module needs only the verifier token in scope.
  */
 @Injectable()
 export class AuthGuard implements CanActivate {
-  constructor(private readonly tokens: TokenService) {}
+  constructor(
+    @Inject(ACCESS_TOKEN_VERIFIER)
+    private readonly verifier: AccessTokenVerifier,
+  ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context
@@ -55,7 +66,7 @@ export class AuthGuard implements CanActivate {
       throw new UnauthorizedException({ message: 'Missing bearer token' });
     }
 
-    const { sub, sid } = await this.tokens.verifyAccessToken(token);
+    const { sub, sid } = await this.verifier.verifyAccessToken(token);
     request.userId = sub;
     request.sessionId = sid;
     return true;

@@ -657,6 +657,16 @@ describe('identity auth guard, refresh, profile (e2e)', () => {
       expect(res.status).toBe(200);
       const rows = res.body as { id: string; current: boolean }[];
       expect(rows).toHaveLength(2);
+      // Pin the exact key set so a future `select` widening that leaks
+      // `tokenHash` (or `userId`) fails here.
+      expect(Object.keys(rows[0]).sort()).toEqual([
+        'clientType',
+        'current',
+        'id',
+        'ip',
+        'issuedAt',
+        'lastUserAgent',
+      ]);
       expect(rows.filter((r) => r.current)).toHaveLength(1);
       expect(rows.find((r) => r.current)?.id).toBe(sidOf(firstToken));
     });
@@ -734,6 +744,21 @@ describe('identity auth guard, refresh, profile (e2e)', () => {
         .post('/auth/refresh')
         .send({});
       expect(res.status).toBe(401);
+    });
+
+    it('WEB: rotates from just the cookie, with NO request body at all', async () => {
+      // The natural browser call: `fetch('/auth/refresh', { method: 'POST',
+      // credentials: 'include' })` -- no body, no Content-Type. Must not 400.
+      const reg = await register('WEB');
+      const c1 = refreshCookieValue(reg);
+
+      const rot = await request(app.getHttpServer())
+        .post('/auth/refresh')
+        .set('Cookie', `refresh_token=${c1}`);
+
+      expect(rot.status).toBe(200);
+      expect((rot.body as Body).refreshToken).toBeUndefined();
+      expect(refreshCookieValue(rot)).not.toBe(c1);
     });
   });
 

@@ -12,6 +12,8 @@ import {
   UseGuards,
 } from '@nestjs/common';
 
+import { z } from 'zod';
+
 import { RateLimit, RateLimitGuard } from '../../shared/http/rate-limit.guard';
 import { ZodValidationPipe } from '../../shared/http/zod-validation.pipe';
 import { AuthGuard } from './auth.guard';
@@ -41,10 +43,23 @@ import {
 } from './refresh-cookie';
 
 /**
+ * A real browser refresh is `fetch('/auth/refresh', { method: 'POST',
+ * credentials: 'include' })` -- no body at all. Treat a missing / empty body as
+ * `{}` so the cookie is still read; a body that IS sent is validated strictly
+ * (`refreshRequestSchema.strict()`), so a mistyped field is still a 400.
+ */
+const refreshBodySchema = z.preprocess(
+  (value) => (value === undefined || value === null || value === '' ? {} : value),
+  refreshRequestSchema,
+);
+
+/**
  * Minimal structural views of the Fastify request/reply -- only the members the
  * controller touches. Avoids a source dependency on `fastify` (a transitive
  * package) while keeping the handler typed. `cookies` is populated by
- * `@fastify/cookie`, registered in `main.ts` and every e2e app setup.
+ * `@fastify/cookie`, registered in `main.ts` bootstrap and in
+ * `identity.e2e-spec.ts`'s app setup (a shared e2e app factory is a deferred
+ * follow-up).
  */
 interface RequestView {
   readonly ip?: string;
@@ -98,22 +113,24 @@ export class IdentityController {
   }
 
   /**
-   * Exchange a refresh token for a new pair, rotating it. WEB presents the token
-   * in the `refresh_token` cookie; ANDROID in the body. The response transport
-   * follows the *session's* recorded `client_type`, not the request.
+   * Exchange a refresh token for a new pair, rotating it. The token is taken
+   * from the `refresh_token` cookie when one is present (WEB), otherwise from
+   * `refreshToken` in the body (ANDROID). The response transport follows the
+   * *session's* recorded `client_type`, not the request.
    */
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   @RateLimit({ limit: REFRESH_RATE_LIMIT, windowMs: RATE_LIMIT_WINDOW_MS })
   async refresh(
-    @Body(new ZodValidationPipe(refreshRequestSchema)) body: RefreshRequest,
+    @Body(new ZodValidationPipe(refreshBodySchema)) body: RefreshRequest,
     @Req() request: RequestView,
     @Res({ passthrough: true }) reply: ReplyView,
   ): Promise<AuthResponse> {
+    // Cookie first, then body token. An ANDROID client that omits `clientType`
+    // would otherwise default to WEB and get an opaque 401 despite a valid
+    // body token.
     const presented =
-      body.clientType === 'ANDROID'
-        ? body.refreshToken
-        : request.cookies?.[REFRESH_COOKIE_NAME];
+      request.cookies?.[REFRESH_COOKIE_NAME] ?? body.refreshToken;
 
     if (!presented) {
       throw new UnauthorizedException({ message: 'Invalid refresh token' });

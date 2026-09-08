@@ -83,20 +83,21 @@ export const authResponseSchema = z.object({
 export type AuthResponse = z.infer<typeof authResponseSchema>;
 
 /**
- * `POST /auth/refresh` request. The refresh token reaches the server by the
- * transport its `clientType` dictates (`SPEC-identity.md` §"Transport differs
- * per client"):
+ * `POST /auth/refresh` request. The server takes the refresh token from the
+ * `refresh_token` cookie when one is present (WEB), otherwise from
+ * `refreshToken` in this body (ANDROID -- no cookie jar). `clientType` is
+ * advisory only; the response transport follows the *session's* recorded type.
  *
- *  - `WEB`     -> the `refresh_token` cookie, path-scoped to `/auth/refresh`;
- *                 `refreshToken` in the body is ignored.
- *  - `ANDROID` -> `refreshToken` in this body (no cookie jar).
- *
- * `clientType` defaults to `WEB`, matching register/login.
+ * The body itself is optional at the boundary -- a browser's
+ * `fetch('/auth/refresh', { credentials: 'include' })` sends none -- but when
+ * one is sent it is `.strict()`: a mistyped field is a 400, not a silent drop.
  */
-export const refreshRequestSchema = z.object({
-  refreshToken: z.string().min(1).max(512).optional(), // opaque base64url; bounded to cap work
-  clientType: clientTypeSchema.default('WEB'),
-});
+export const refreshRequestSchema = z
+  .object({
+    refreshToken: z.string().min(1).max(512).optional(), // opaque base64url; bounded to cap work
+    clientType: clientTypeSchema.default('WEB'),
+  })
+  .strict();
 export type RefreshRequest = z.infer<typeof refreshRequestSchema>;
 export type RefreshRequestInput = z.input<typeof refreshRequestSchema>;
 

@@ -49,6 +49,20 @@ export interface VerifiedAccessToken {
 }
 
 /**
+ * The slice of `TokenService` that `AuthGuard` -- and any other module's
+ * guard -- depends on: verification only, never issuance. `IdentityModule`
+ * binds {@link ACCESS_TOKEN_VERIFIER} to the `TokenService` singleton and
+ * exports *that token*, so a consumer module can resolve the guard without
+ * `issueAccessToken` leaking outside `identity`.
+ */
+export interface AccessTokenVerifier {
+  verifyAccessToken(token: string): Promise<VerifiedAccessToken>;
+}
+
+/** DI token for {@link AccessTokenVerifier}. */
+export const ACCESS_TOKEN_VERIFIER = Symbol('ACCESS_TOKEN_VERIFIER');
+
+/**
  * Mints EdDSA access tokens and owns the signing key.
  *
  * Key precedence (ADR 0003, task-9b context):
@@ -64,7 +78,7 @@ export interface VerifiedAccessToken {
  * under the same identifier.
  */
 @Injectable()
-export class TokenService implements OnModuleInit {
+export class TokenService implements OnModuleInit, AccessTokenVerifier {
   private readonly logger = new Logger(TokenService.name);
 
   private signingKey!: SigningKey;
@@ -210,6 +224,14 @@ export class TokenService implements OnModuleInit {
       if (error instanceof UnauthorizedException) {
         throw error;
       }
+      // The error CLASS only -- never `error.message`, which can quote token
+      // bytes into the log. Enough to tell an `alg:none` reject from a
+      // key-loading bug that would otherwise be an invisible 401.
+      this.logger.debug(
+        `access token rejected: ${
+          error instanceof Error ? error.constructor.name : typeof error
+        }`,
+      );
       throw new UnauthorizedException({ message: 'Invalid access token' });
     }
   }

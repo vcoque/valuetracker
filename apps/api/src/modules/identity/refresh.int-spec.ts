@@ -62,6 +62,7 @@ describe('identity refresh + rotation (integration)', () => {
   });
 
   afterEach(async () => {
+    jest.restoreAllMocks();
     await moduleRef.close();
   });
 
@@ -166,5 +167,95 @@ describe('identity refresh + rotation (integration)', () => {
     await expect(
       identity.refresh(issued.refreshToken, context),
     ).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  /**
+   * F10.2 -- post-commit ordering, distinct from a concurrent (in-flight) race.
+   * A client completes one refresh, its response is lost on a flaky network, and
+   * it retries with the SAME (now-rotated) token. The retry's `findUnique` runs
+   * AFTER the first refresh committed, so it lands on the `replacedById !== null`
+   * branch and revokes EVERY live session for the user -- here, three devices.
+   *
+   * This is the behaviour `SPEC-identity.md` mandates ("replaying an
+   * already-rotated token revokes the whole chain"). The blast radius and the
+   * standard grace-window mitigation are documented in ADR 0003 under
+   * "Reuse detection: strictness vs. client retries"; the mitigation is deferred
+   * pending an owner decision and is NOT implemented.
+   */
+  it('post-commit replay (a lost-response retry) logs the user out on every device', async () => {
+    const issued = await registerAndroid('retry@example.com');
+    const { userId } = await prisma.session.findUniqueOrThrow({
+      where: { tokenHash: hashRefreshToken(issued.refreshToken) },
+    });
+    // Two more logged-in devices.
+    await identity.login(
+      { email: 'retry@example.com', password: 'a-sufficiently-long-password', clientType: 'ANDROID' },
+      context,
+    );
+    await identity.login(
+      { email: 'retry@example.com', password: 'a-sufficiently-long-password', clientType: 'ANDROID' },
+      context,
+    );
+    expect(await liveSessionCount(userId)).toBe(3);
+
+    // A normal refresh runs to completion (its response is then "lost").
+    await identity.refresh(issued.refreshToken, context);
+    expect(await liveSessionCount(userId)).toBe(3); // 2 untouched + 1 successor
+
+    // The client retries with the same token it already spent.
+    await expect(
+      identity.refresh(issued.refreshToken, context),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+
+    // Every session for the user is now revoked -- the two bystander devices too.
+    expect(await liveSessionCount(userId)).toBe(0);
+    const rows = await prisma.session.findMany({ where: { userId } });
+    expect(rows.every((row) => row.revokedAt !== null)).toBe(true);
+  });
+
+  /**
+   * F10.3 -- the rotation transaction rolls back cleanly. A concurrent actor
+   * revokes the presented row AFTER `refresh()` has read it but BEFORE the
+   * conditional `updateMany`, so that update matches zero rows, the `count !== 1`
+   * guard throws inside the `$transaction`, and the speculatively-created
+   * successor must not survive.
+   */
+  it('rolls the rotation back with no orphan successor when the conditional update matches nothing', async () => {
+    const issued = await registerAndroid('rollback@example.com');
+    const original = await prisma.session.findUniqueOrThrow({
+      where: { tokenHash: hashRefreshToken(issued.refreshToken) },
+    });
+    const before = await prisma.session.count({
+      where: { userId: original.userId },
+    });
+
+    const realFindUnique = prisma.session.findUnique.bind(
+      prisma.session,
+    ) as (args: unknown) => Promise<unknown>;
+    jest.spyOn(prisma.session, 'findUnique').mockImplementationOnce(((
+      args: unknown,
+    ) =>
+      realFindUnique(args).then(async (found) => {
+        await prisma.session.update({
+          where: { id: original.id },
+          data: { revokedAt: new Date() },
+        });
+        return found;
+      })) as unknown as typeof prisma.session.findUnique);
+
+    await expect(
+      identity.refresh(issued.refreshToken, context),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+
+    // No new row persisted: the successor create was rolled back with the txn.
+    const after = await prisma.session.count({
+      where: { userId: original.userId },
+    });
+    expect(after).toBe(before);
+    expect(
+      await prisma.session.findFirst({
+        where: { userId: original.userId, revokedAt: null },
+      }),
+    ).toBeNull();
   });
 });

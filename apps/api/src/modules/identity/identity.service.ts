@@ -269,13 +269,12 @@ export class IdentityService {
     const now = new Date();
 
     if (session.replacedById !== null) {
-      // Replay of a rotated token -> revoke the whole chain for this user.
-      await this.prisma.$transaction([
-        this.prisma.session.updateMany({
-          where: { userId: session.userId, revokedAt: null },
-          data: { revokedAt: now },
-        }),
-      ]);
+      // Replay of a rotated token -> revoke the whole chain for this user. A
+      // single `updateMany` is already atomic; no transaction wrapper needed.
+      await this.prisma.session.updateMany({
+        where: { userId: session.userId, revokedAt: null },
+        data: { revokedAt: now },
+      });
       throw new UnauthorizedException({ message: REFRESH_REJECTED_MESSAGE });
     }
 

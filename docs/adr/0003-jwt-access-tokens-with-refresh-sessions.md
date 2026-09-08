@@ -59,6 +59,29 @@ slice; per-IP rate limiting on the auth endpoints is not.
   rotation chain, reuse detection, and key management. Each is covered by an
   acceptance criterion in `SPEC-identity.md` rather than left to judgement.
 
+## Reuse detection: strictness vs. client retries
+
+Any replay of an **already-rotated** refresh token currently revokes **every
+live session for that user** — `SPEC-identity.md`'s "revokes the entire chain
+for that user", implemented in `IdentityService.refresh`. This is correct when
+the replay is genuine theft, but it does not distinguish a benign
+double-submit: if a client fires two parallel refreshes, or completes a refresh
+whose response is lost on a flaky mobile network and retries with the same
+token, the second request lands on the "already rotated" branch and logs the
+user out on **all** devices. Flaky networks do this routinely.
+
+The standard mitigation is an **Auth0-style grace window**: if the presented
+token was rotated very recently (say, younger than ~10 s) and its immediate
+successor is still live and un-rotated, treat the replay as a retry — return a
+plain 401 for that request without revoking the chain. Genuine theft, where the
+attacker races the legitimate client, still trips detection because the
+successor will already have been rotated or the window will have elapsed.
+
+This is **deferred pending an owner decision** and is deliberately **not
+implemented** in the walking skeleton. Until it is, the guidance to clients is:
+never fire refreshes in parallel, and treat a failed refresh as "re-login",
+not "retry".
+
 ## Alternatives considered
 
 **Server-side opaque sessions in a cookie.** The original recommendation, and
