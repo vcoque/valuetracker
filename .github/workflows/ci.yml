@@ -1,0 +1,96 @@
+# ValueTracker CI -- enforces the standing quality bar on every push (SPEC.md
+# §Success Criteria: "CI enforces typecheck, lint, unit, integration and
+# coverage gates on every push").
+#
+# Runs the same commands, against the same toolchain image, the same way a
+# developer does locally: `compose-ci.yaml` builds the CI environment from
+# `Dockerfile.dev` (see that file's comment -- it needs nothing CI-specific)
+# and every step below is `docker compose run` against it, so "passes locally"
+# and "passes in CI" mean running the literal same commands in the literal
+# same container. See `.superpowers/sdd/plan/task-17-report.md` for the full
+# containerized-vs-native-runner design discussion.
+#
+# One job, one sequence, deliberately not split into parallel
+# typecheck/lint/test jobs: jest.config.ts measures coverage across the unit,
+# integration and e2e projects *together* in a single Jest invocation (its own
+# comment explains why -- "a line covered by an e2e test is covered"), so the
+# 80% gate can only be enforced by one combined `npm test -- --coverage` run.
+# Splitting that run across jobs would need a coverage-merge step the toolchain
+# does not have today. typecheck and lint run first anyway, so a fast, cheap
+# failure still fails fast before the slower Testcontainers-backed step runs.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# A new push to the same branch/PR supersedes the CI run already in flight for
+# it -- no reason to keep burning runner minutes on a commit nobody will read
+# the result of.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    # Generous but bounded: Testcontainers pulling a fresh PostgreSQL image on
+    # a cold runner is the slowest step, and a hang here should fail the build
+    # rather than run until GitHub's own job ceiling.
+    timeout-minutes: 30
+    env:
+      COMPOSE_CMD: docker compose --file compose-ci.yaml --env-file .env.ci
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ubuntu-latest ships Docker and the `docker compose` v2 plugin
+      # natively (same v2+ requirement scripts/check-env.sh verifies locally)
+      # -- Testcontainers needs no setup beyond the socket share below.
+
+      - name: Compute per-runner values for compose-ci.yaml
+        # Mirrors what `./scripts/check-env.sh --init-env` writes to the
+        # gitignored, per-machine .env.dev.local locally. A GitHub Actions
+        # runner is a fresh machine every run, so there is nothing to persist
+        # -- these are computed fresh and exported as plain shell environment
+        # variables, which compose-ci.yaml's ${VAR:?} interpolation reads
+        # exactly like an --env-file (see that file's header comment).
+        run: |
+          echo "HOST_UID=$(id -u)" >> "$GITHUB_ENV"
+          echo "HOST_GID=$(id -g)" >> "$GITHUB_ENV"
+          echo "DOCKER_GID=$(getent group docker | cut -d: -f3)" >> "$GITHUB_ENV"
+
+      - name: Build the CI toolchain image
+        run: $COMPOSE_CMD build app
+
+      - name: Install dependencies (npm ci)
+        run: $COMPOSE_CMD run --rm -T app npm ci
+
+      - name: Build (tsc -> dist/)
+        run: $COMPOSE_CMD run --rm -T app npm run build
+
+      - name: Typecheck
+        run: $COMPOSE_CMD run --rm -T app npm run typecheck
+
+      - name: Lint
+        run: $COMPOSE_CMD run --rm -T app npm run lint
+
+      # Runs every Jest project -- unit, integration, e2e (jest.config.ts
+      # `projects`) -- in one invocation. Integration and e2e provision their
+      # own throwaway PostgreSQL via Testcontainers
+      # (apps/api/test/global-setup.ts) and run `prisma migrate deploy`
+      # against it before any test executes, on every single run -- so this
+      # step is also where the walking skeleton's migrations are proved
+      # against an empty database; no separate `migrate deploy` step exists
+      # because that would just repeat, with no additional signal, what
+      # global-setup.ts already does unconditionally first.
+      #
+      # --coverage is what makes jest.config.ts's coverageThreshold (80%
+      # global, Task 3) actually gate the build: without this flag Jest
+      # collects no coverage and the threshold never evaluates.
+      - name: Test (unit + integration + e2e, coverage gate)
+        run: $COMPOSE_CMD run --rm -T app npm test -- --coverage

@@ -1,0 +1,77 @@
+# ValueTracker -- CONTINUOUS INTEGRATION environment.
+#
+# A further environment added by the same rule as compose-dev.yaml (SPEC.md
+# §"Environments are named, never implicit"): its own explicitly-named compose
+# file and env file, nothing added to the dev ones to serve it.
+#
+#   docker compose -f compose-ci.yaml --env-file .env.ci <command>
+#
+# It reuses Dockerfile.dev as-is -- the toolchain image needs nothing
+# CI-specific, so only the orchestration and env values are new -- but it is
+# not a copy of compose-dev.yaml. Two things dev needs and CI does not:
+#
+#   - No `db` service. That service exists for the local dev loop
+#     (`start:dev`) and for `npx prisma migrate dev`; CI runs neither. The
+#     integration and e2e projects never touch it either way -- they get a
+#     throwaway PostgreSQL from Testcontainers (apps/api/test/global-setup.ts),
+#     which is why DATABASE_URL does not appear below: nothing that runs here
+#     (npm ci, build, typecheck, lint, the test suites) needs it set in
+#     advance. global-setup.ts sets it itself once its container is listening.
+#   - No published ports. CI never runs `start:dev`/`start:prod` and nothing
+#     outside the container needs to reach it.
+#
+# Everything else -- the docker-socket share and TESTCONTAINERS_HOST_OVERRIDE
+# that let Testcontainers start sibling containers from inside this one -- is
+# unchanged from compose-dev.yaml, because that is exactly the mechanism the
+# integration and e2e projects need here too.
+name: ${COMPOSE_PROJECT_NAME:?missing .env.ci -- see the header of this file}
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+      args:
+        NODE_IMAGE: ${NODE_IMAGE:?set NODE_IMAGE in .env.ci}
+      # See compose-dev.yaml's identical comment: BuildKit copies the host's
+      # /etc/resolv.conf into the build's own network namespace verbatim, and
+      # sharing the host namespace for the build keeps apt lookups resolvable
+      # wherever that matters. Runtime networking is unaffected.
+      network: host
+    init: true
+    # No committed .env.ci.local exists (a GitHub Actions runner is a fresh
+    # machine every run -- there is no per-machine file to keep). The workflow
+    # computes these the same way `check-env.sh --init-env` does locally (id -u
+    # / id -g / getent group docker) and exports them as plain shell
+    # environment variables, which this interpolation reads exactly like an
+    # --env-file. Running as the runner's own uid/gid, same as dev, means files
+    # this container writes into the bind-mounted checkout below (node_modules,
+    # dist/, coverage/) come out owned by the job's own user, not root.
+    user: "${HOST_UID:?export HOST_UID before invoking compose-ci.yaml}:${HOST_GID:?export HOST_GID before invoking compose-ci.yaml}"
+    group_add:
+      # The runner's docker group, so the socket mounted below is readable --
+      # same reason compose-dev.yaml adds the developer's.
+      - "${DOCKER_GID:?export DOCKER_GID before invoking compose-ci.yaml}"
+    volumes:
+      # The GitHub Actions checkout, not a developer's working tree, but the
+      # same bind-mount shape as compose-dev.yaml: this image carries no
+      # project code (see Dockerfile.dev), so the checkout must be mounted in.
+      - .:/workspace
+      # Testcontainers drives the runner's own docker daemon directly
+      # (docker-outside-of-docker) -- ubuntu-latest ships Docker natively, so
+      # this is the same sibling-container pattern compose-dev.yaml uses, not
+      # a CI-specific trick.
+      - /var/run/docker.sock:/var/run/docker.sock
+    extra_hosts:
+      # Sibling containers publish their mapped ports on the runner host, not
+      # inside this container's network namespace -- Testcontainers has to
+      # dial back out through the gateway. TESTCONTAINERS_HOST_OVERRIDE below
+      # tells it to.
+      - "host.docker.internal:host-gateway"
+    environment:
+      TESTCONTAINERS_HOST_OVERRIDE: ${TESTCONTAINERS_HOST_OVERRIDE:?set in .env.ci}
+      NODE_ENV: ${NODE_ENV:?set NODE_ENV in .env.ci}
+      # Passed through so global-setup.ts starts the same PostgreSQL version
+      # the development database uses -- see its own comment on why that
+      # match matters.
+      POSTGRES_IMAGE: ${POSTGRES_IMAGE:?set POSTGRES_IMAGE in .env.ci}
