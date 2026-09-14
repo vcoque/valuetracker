@@ -11,9 +11,10 @@ import { ReferenceService } from './reference.service';
  * The `catalog` capability module -- see `SPEC-catalog.md`. Phase 0 gave it
  * only the seeded reference data (`GET /currencies`, `GET /exchanges`); Task
  * 13 added the `instrument` class-table hierarchy (schema + constraints
- * only); Task 14 adds its read model -- `GET /instruments` (search) and `GET
- * /instruments/:id` (discriminated union). `POST`/`PATCH /instruments` are
- * Task 15.
+ * only); Task 14 added its read model -- `GET /instruments` (search) and
+ * `GET /instruments/:id` (discriminated union); Task 15 adds `POST
+ * /instruments` / `PATCH /instruments/:id` -- private FIXED_INCOME
+ * instruments only.
  *
  * `IdentityModule` is imported for `AuthGuard`: every route in this module is
  * "Auth: Yes" (Ruling S4).

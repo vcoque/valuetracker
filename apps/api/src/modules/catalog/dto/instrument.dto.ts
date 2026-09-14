@@ -5,6 +5,8 @@
  * the project layout (mirrors `portfolio/dto/portfolio.dto.ts`).
  */
 export {
+  type CreateFixedIncomeInstrumentRequest,
+  createFixedIncomeInstrumentRequestSchema,
   type CryptoInstrumentResponse,
   cryptoInstrumentResponseSchema,
   type EquityInstrumentResponse,
@@ -23,4 +25,6 @@ export {
   instrumentStatusSchema,
   type InstrumentTypeContract,
   instrumentTypeSchema,
+  type UpdateFixedIncomeInstrumentRequest,
+  updateFixedIncomeInstrumentRequestSchema,
 } from '@valuetracker/contract';

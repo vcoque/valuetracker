@@ -11,16 +11,19 @@ import { RateLimitGuard } from '../../src/shared/http/rate-limit.guard';
 import { PrismaService } from '../../src/shared/prisma/prisma.service';
 
 /**
- * `SPEC-catalog.md` §Verification (Task 14 slice): `GET /instruments`
- * returns public instruments union the caller's own private ones; `GET
- * /instruments/:id` on a private instrument belonging to someone else is
- * 404, never 403 -- ids must not be enumerable, same rule
- * `portfolio.e2e-spec.ts` exercises for portfolios.
+ * `SPEC-catalog.md` §Verification: Task 14's read slice -- `GET
+ * /instruments` returns public instruments union the caller's own private
+ * ones; `GET /instruments/:id` on a private instrument belonging to someone
+ * else is 404, never 403 -- ids must not be enumerable, same rule
+ * `portfolio.e2e-spec.ts` exercises for portfolios -- plus Task 15's write
+ * slice, at the bottom of this file: `POST /instruments` /
+ * `PATCH /instruments/:id`, FIXED_INCOME only.
  *
- * `POST /instruments` does not exist yet (Task 15), so every fixture here is
- * written directly through `PrismaService`'s real nested `create`
- * (Task 13's proven pattern, `instrument-schema.int-spec.ts` Case 6) rather
- * than through the HTTP API.
+ * Every fixture above the `POST`/`PATCH` describe block is written directly
+ * through `PrismaService`'s real nested `create` (Task 13's proven pattern,
+ * `instrument-schema.int-spec.ts` Case 6) rather than through the HTTP API --
+ * that part of the file predates Task 15 and still needs equity/ETF/crypto
+ * fixtures the write API deliberately does not create.
  */
 describe('instrument endpoints (e2e)', () => {
   let app: NestFastifyApplication;
@@ -344,6 +347,186 @@ describe('instrument endpoints (e2e)', () => {
       const response = await request(app.getHttpServer())
         .get('/instruments?bogus=1')
         .set('Authorization', `Bearer ${a.token}`);
+      expect(response.status).toBe(400);
+    });
+  });
+
+  /**
+   * Task 15: `POST /instruments` / `PATCH /instruments/:id` -- FIXED_INCOME
+   * only (`SPEC-catalog.md` §API Surface: "Create a **private** instrument
+   * (fixed income)"). Unlike every fixture above, these go through the real
+   * HTTP API, not `PrismaService` directly.
+   */
+  describe('POST /instruments and PATCH /instruments/:id (fixed income)', () => {
+    function validCdb(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+      return {
+        name: 'Banco X CDB 2028',
+        currencyCode: 'BRL',
+        issuerName: 'Banco X',
+        indexationType: 'CDI',
+        indexPercentage: '110.0000',
+        issueDate: '2024-01-01',
+        maturityDate: '2028-01-01',
+        couponFrequency: 'NONE',
+        dayCountConvention: 'BUS252',
+        faceValue: '1000.000000',
+        allowsEarlyRedemption: true,
+        taxRegime: 'REGRESSIVE_IR',
+        ...overrides,
+      };
+    }
+
+    it('rejects POST/PATCH with no access token (401)', async () => {
+      const server = app.getHttpServer();
+      expect((await request(server).post('/instruments').send(validCdb())).status).toBe(401);
+      expect(
+        (
+          await request(server)
+            .patch(`/instruments/${'0'.repeat(8)}-0000-0000-0000-000000000000`)
+            .send({ issuerName: 'X' })
+        ).status,
+      ).toBe(401);
+    });
+
+    it(
+      'creates a private CDB as user A, reads it back via GET /instruments/:id; ' +
+        "user B gets 404 on it and it's absent from B's GET /instruments",
+      async () => {
+        const server = app.getHttpServer();
+        const a = await register(`inst-post-a-${Date.now()}@example.com`);
+        const b = await register(`inst-post-b-${Date.now()}@example.com`);
+
+        const createResponse = await request(server)
+          .post('/instruments')
+          .set('Authorization', `Bearer ${a.token}`)
+          .send(validCdb());
+        expect(createResponse.status).toBe(201);
+        expect(createResponse.body).toMatchObject({
+          instrumentType: 'FIXED_INCOME',
+          ownerUserId: a.userId,
+          status: 'ACTIVE',
+          isVariableIncome: false,
+          issuerName: 'Banco X',
+          indexationType: 'CDI',
+          indexPercentage: '110.0000',
+          issueDate: '2024-01-01',
+          maturityDate: '2028-01-01',
+        });
+        // Money on the wire is a decimal STRING, never a JSON number.
+        expect(typeof (createResponse.body as { faceValue: unknown }).faceValue).toBe('string');
+        const id = (createResponse.body as { id: string }).id;
+
+        const getAsA = await request(server)
+          .get(`/instruments/${id}`)
+          .set('Authorization', `Bearer ${a.token}`);
+        expect(getAsA.status).toBe(200);
+        expect(getAsA.body).toMatchObject({ id, ownerUserId: a.userId, issuerName: 'Banco X' });
+
+        const getAsB = await request(server)
+          .get(`/instruments/${id}`)
+          .set('Authorization', `Bearer ${b.token}`);
+        expect(getAsB.status).toBe(404);
+
+        const listAsB = await request(server)
+          .get('/instruments')
+          .set('Authorization', `Bearer ${b.token}`);
+        expect(listAsB.status).toBe(200);
+        expect((listAsB.body as { id: string }[]).map((i) => i.id)).not.toContain(id);
+      },
+    );
+
+    it.each(['ownerUserId', 'instrumentType', 'isVariableIncome', 'status', 'dataSourceId'])(
+      'rejects an attempt to set %s in the POST body with a 400 (.strict(), not silently ignored)',
+      async (forbiddenField) => {
+        const a = await register(`inst-post-forbidden-${forbiddenField}-${Date.now()}@example.com`);
+        const response = await request(app.getHttpServer())
+          .post('/instruments')
+          .set('Authorization', `Bearer ${a.token}`)
+          .send(validCdb({ [forbiddenField]: 'anything' }));
+        expect(response.status).toBe(400);
+      },
+    );
+
+    it('rejects maturityDate before issueDate with a 400', async () => {
+      const a = await register(`inst-post-baddates-${Date.now()}@example.com`);
+      const response = await request(app.getHttpServer())
+        .post('/instruments')
+        .set('Authorization', `Bearer ${a.token}`)
+        .send(validCdb({ issueDate: '2028-01-01', maturityDate: '2024-01-01' }));
+      expect(response.status).toBe(400);
+    });
+
+    it('rejects an unrecognized indexationType with a 400', async () => {
+      const a = await register(`inst-post-badindex-${Date.now()}@example.com`);
+      const response = await request(app.getHttpServer())
+        .post('/instruments')
+        .set('Authorization', `Bearer ${a.token}`)
+        .send(validCdb({ indexationType: 'LIBOR' }));
+      expect(response.status).toBe(400);
+    });
+
+    it('PATCH on another user\'s instrument returns 404, and leaves it unchanged', async () => {
+      const server = app.getHttpServer();
+      const a = await register(`inst-patch-owner-${Date.now()}@example.com`);
+      const b = await register(`inst-patch-stranger-${Date.now()}@example.com`);
+
+      const createResponse = await request(server)
+        .post('/instruments')
+        .set('Authorization', `Bearer ${a.token}`)
+        .send(validCdb());
+      const id = (createResponse.body as { id: string }).id;
+
+      const patchAsB = await request(server)
+        .patch(`/instruments/${id}`)
+        .set('Authorization', `Bearer ${b.token}`)
+        .send({ issuerName: 'Hijacked Bank' });
+      expect(patchAsB.status).toBe(404);
+
+      const getAsA = await request(server)
+        .get(`/instruments/${id}`)
+        .set('Authorization', `Bearer ${a.token}`);
+      expect(getAsA.body).toMatchObject({ issuerName: 'Banco X' });
+    });
+
+    it('PATCH updates the fields sent and leaves the rest (and ownership) unchanged', async () => {
+      const server = app.getHttpServer();
+      const a = await register(`inst-patch-happy-${Date.now()}@example.com`);
+
+      const createResponse = await request(server)
+        .post('/instruments')
+        .set('Authorization', `Bearer ${a.token}`)
+        .send(validCdb());
+      const id = (createResponse.body as { id: string }).id;
+
+      const patchResponse = await request(server)
+        .patch(`/instruments/${id}`)
+        .set('Authorization', `Bearer ${a.token}`)
+        .send({ issuerName: 'Banco X Renamed', status: 'MATURED' });
+      expect(patchResponse.status).toBe(200);
+      expect(patchResponse.body).toMatchObject({
+        id,
+        ownerUserId: a.userId,
+        issuerName: 'Banco X Renamed',
+        status: 'MATURED',
+        // Untouched.
+        indexationType: 'CDI',
+        maturityDate: '2028-01-01',
+      });
+    });
+
+    it('rejects a PATCH attempt to change instrumentType/ownerUserId/isVariableIncome with a 400', async () => {
+      const server = app.getHttpServer();
+      const a = await register(`inst-patch-forbidden-${Date.now()}@example.com`);
+      const createResponse = await request(server)
+        .post('/instruments')
+        .set('Authorization', `Bearer ${a.token}`)
+        .send(validCdb());
+      const id = (createResponse.body as { id: string }).id;
+
+      const response = await request(server)
+        .patch(`/instruments/${id}`)
+        .set('Authorization', `Bearer ${a.token}`)
+        .send({ instrumentType: 'EQUITY' });
       expect(response.status).toBe(400);
     });
   });
