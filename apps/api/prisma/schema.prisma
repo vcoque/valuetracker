@@ -53,6 +53,10 @@ model Currency {
   /// untouched.
   users User[]
 
+  /// Back-reference for the `portfolio.base_currency_code` foreign key
+  /// (Task 11). Virtual only -- no column on `currency`.
+  portfolios Portfolio[]
+
   @@map("currency")
 }
 
@@ -144,6 +148,7 @@ model User {
   baseCurrency Currency        @relation(fields: [baseCurrencyCode], references: [code])
   credential   UserCredential?
   sessions     Session[]
+  portfolios   Portfolio[]
 
   @@map("user")
 }
@@ -212,4 +217,61 @@ model Session {
   replaces   Session[] @relation("SessionRotation")
 
   @@map("session")
+}
+
+/// A user's goal container -- "Faculdade da Ana", "Aposentadoria" -- and the
+/// declaration of the currency its results are reported in.
+/// Specified in SPEC-portfolio.md §portfolio; owned by the `portfolio` module.
+///
+/// Positions, holdings and transactions are NOT here: they belong to `ledger`,
+/// because they are derived from transactions and maintained by the
+/// cost-basis engine (SPEC-portfolio.md §Objective).
+model Portfolio {
+  /// Surrogate key. Defaulted in the database so a plain SQL insert needs no id.
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  /// Owner. Every read and write is scoped by this column in the `where`
+  /// clause, never checked after fetching (SPEC.md §Code Style).
+  userId String @map("user_id") @db.Uuid
+
+  /// e.g. "Faculdade da Ana".
+  name String @db.VarChar(128)
+
+  description String? @db.VarChar(512)
+
+  /// Free text, e.g. "buy a house in 10 years" -- never validated against a
+  /// fixed list. An enum would force it into a GENERAL bucket that
+  /// communicates nothing (SPEC-portfolio.md).
+  objective String? @db.VarChar(255)
+
+  /// Reporting currency. Immutable after creation -- changing it would
+  /// invalidate every stored snapshot, since those record values already
+  /// converted into this currency (SPEC-portfolio.md "Constraints that carry
+  /// real weight"). Task 12's `PATCH` enforces the immutability; this FK just
+  /// sets it at create time.
+  baseCurrencyCode String @map("base_currency_code") @db.Char(3)
+
+  /// Goal amount, denominated in `baseCurrencyCode`. Independently optional
+  /// from `targetDate` -- a portfolio may carry either, both or neither.
+  targetAmount Decimal? @map("target_amount") @db.Decimal(20, 4)
+
+  /// Goal horizon. Independently optional from `targetAmount`.
+  targetDate DateTime? @map("target_date") @db.Date
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  /// Null while active. Archive rather than delete: Task 12 adds the
+  /// archive/unarchive endpoints, but the column exists from the start so
+  /// every default query can already filter `archivedAt IS NULL`.
+  archivedAt DateTime? @map("archived_at")
+
+  user         User     @relation(fields: [userId], references: [id])
+  baseCurrency Currency @relation(fields: [baseCurrencyCode], references: [code])
+
+  /// A user cannot own two portfolios with the same name (SPEC-portfolio.md
+  /// AC). Task 12 is the task that carries real weight for this constraint,
+  /// but it is cheap and additive to add now rather than in a second
+  /// migration later.
+  @@unique([userId, name])
+  @@map("portfolio")
 }

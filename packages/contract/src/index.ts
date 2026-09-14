@@ -4,3 +4,4 @@
  * the same source. This package imports nothing from `apps/*`.
  */
 export * from './auth';
+export * from './portfolio';
