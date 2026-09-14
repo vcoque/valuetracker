@@ -9,7 +9,7 @@ import {
   type InstrumentView,
   mapInstrumentRow,
 } from './domain/instrument';
-import type { InstrumentSearchQuery } from './dto/instrument.dto';
+import { type InstrumentSearchQuery, instrumentStatusSchema } from './dto/instrument.dto';
 
 /** Task 13's proven read pattern (ADR 0005, task-14-context.md). */
 const INSTRUMENT_INCLUDE = {
@@ -103,19 +103,53 @@ export class InstrumentService {
 
 /**
  * The real Prisma row (base + `include`d relations) -> the domain's
- * {@link InstrumentRow}. `instrumentType` and `status` are cast, not
- * re-validated: both are FK/lookup-table-enforced at the database
- * (`instrument_type.code`, Task 13; `status` is free text in the schema but
- * every write path -- Task 15 -- will validate against
- * `instrumentStatusSchema`), so a row read back out of `instrument` is
- * trusted data, not user input. `domain/instrument.ts` stays free of any
+ * {@link InstrumentRow}. `domain/instrument.ts` stays free of any
  * `@prisma/client` import; this is the one boundary point that bridges the
  * two shapes.
+ *
+ * `instrumentType` is cast, not re-validated: it is FK-enforced at the
+ * database against `instrument_type.code` (Task 13), so a row read back out
+ * of `instrument` already carries a value from the closed set --
+ * `InstrumentTypeCode` and the FK's domain are the same set by construction.
+ *
+ * `status`, unlike `instrumentType`, has **no** database-level constraint --
+ * the Task 13 migration declares it `VARCHAR(16) NOT NULL` only, with no
+ * CHECK or FK pinning it to `instrumentStatusSchema`'s four values. A blind
+ * cast here would be trusting a boundary the database does not actually
+ * guarantee, so `status` is validated (not cast) via {@link toInstrumentStatus}
+ * -- the same fail-loudly posture `mapInstrumentRow`'s `requireSpecialization`
+ * takes for its own DB-guaranteed invariant, applied here to one that isn't
+ * yet DB-guaranteed. Every write path into `instrument.status` today is
+ * Task 13's own tests and the seed (both always `'ACTIVE'`); Task 15's
+ * `POST`/`PATCH /instruments` must validate against this same
+ * `instrumentStatusSchema` at the write boundary, or a future bad value
+ * would surface here as a 500 rather than being rejected at write time.
  */
 function toInstrumentRow(row: InstrumentWithSpecializations): InstrumentRow {
   return {
     ...row,
     instrumentType: row.instrumentType as InstrumentTypeCode,
-    status: row.status as InstrumentStatus,
+    status: toInstrumentStatus(row.id, row.status),
   };
+}
+
+/**
+ * Validates `status` against `instrumentStatusSchema` rather than casting it
+ * (F14.1, fix round 1) -- see {@link toInstrumentRow}'s doc comment for why
+ * this field, alone among the base row's fields, cannot be trusted as a cast.
+ * Throws a descriptive error naming the offending instrument and value,
+ * mirroring `mapInstrumentRow`'s `requireSpecialization`.
+ *
+ * Exported (only) so `instrument.service.spec.ts` can exercise the
+ * malformed-status path directly, without standing up a `PrismaService` --
+ * every other export of this file is the injectable `InstrumentService`.
+ */
+export function toInstrumentStatus(instrumentId: string, status: string): InstrumentStatus {
+  const result = instrumentStatusSchema.safeParse(status);
+  if (!result.success) {
+    throw new Error(
+      `Instrument ${instrumentId} has an unrecognized status: ${JSON.stringify(status)}`,
+    );
+  }
+  return result.data;
 }
