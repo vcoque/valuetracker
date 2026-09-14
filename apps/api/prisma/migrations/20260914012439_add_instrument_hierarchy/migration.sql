@@ -1,24 +1,34 @@
--- ============================================================================
--- HAND-AUTHORED SQL -- docs/adr/0005-instrument-inheritance.md (Ruling S7).
--- Everything above the next "-- CreateTable"/"-- AddForeignKey" marker back
--- to here was emitted by `prisma migrate dev --create-only` from
--- schema.prisma; the sections below are added by hand because Prisma 7 has
--- no schema-language syntax for a lookup-table-only column, a CHECK
--- constraint, a trigger, or a partial index. This file is edited only
--- *before* its first `prisma migrate dev` apply -- see the ADR's "Deviation
--- from SPEC.md".
--- ============================================================================
-
 -- Discriminator as a lookup table, not a CHECK(...IN(...)) list: registering
 -- a fifth asset class is then an INSERT here, touching no existing table
 -- (SPEC-catalog.md "Adding a new asset class ... No existing table changes").
+-- `InstrumentType` IS a Prisma model (fix round 1, F13.2 -- see schema.prisma's
+-- header comment on the hierarchy): this CREATE TABLE is exactly what
+-- `prisma migrate dev --create-only` would emit for it, VARCHAR(24) matching
+-- `instrument.instrument_type`'s column type so the FK relation below is
+-- legal. Only the seed INSERT that follows stays hand-authored -- Prisma has
+-- no schema-language way to seed rows at migrate time.
+-- CreateTable
 CREATE TABLE "instrument_type" (
-    "code" TEXT NOT NULL,
+    "code" VARCHAR(24) NOT NULL,
 
     CONSTRAINT "instrument_type_pkey" PRIMARY KEY ("code")
 );
 
+-- Hand-authored (Ruling S7): the seed rows themselves -- see comment above.
 INSERT INTO "instrument_type" ("code") VALUES ('EQUITY'), ('ETF'), ('FIXED_INCOME'), ('CRYPTO');
+
+-- ============================================================================
+-- HAND-AUTHORED SQL -- docs/adr/0005-instrument-inheritance.md (Ruling S7).
+-- Everything above this banner back to the previous one was emitted by
+-- `prisma migrate dev --create-only` from schema.prisma; the sections below
+-- are added by hand because Prisma 7 has no schema-language syntax for a
+-- CHECK constraint, a trigger, or a partial index. This file is edited only
+-- *before* its first `prisma migrate dev` apply -- see the ADR's "Deviation
+-- from SPEC.md". Fix round 1 (F13.2) re-edited this already-applied migration
+-- in place rather than appending a new one -- sanctioned by Ruling S13: it
+-- has only ever run against ephemeral Testcontainers/`migrate reset`
+-- databases, never a shared or persistent one.
+-- ============================================================================
 
 -- CreateTable
 CREATE TABLE "instrument" (
@@ -103,7 +113,14 @@ CREATE TABLE "instrument_crypto" (
 CREATE UNIQUE INDEX "instrument_id_type_uk" ON "instrument"("id", "instrument_type");
 
 -- AddForeignKey
-ALTER TABLE "instrument" ADD CONSTRAINT "instrument_owner_user_id_fkey" FOREIGN KEY ("owner_user_id") REFERENCES "user"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+-- ON DELETE RESTRICT, not Prisma's default SET NULL for an optional relation
+-- (fix round 1, F13.1): owner_user_id IS NULL means "public catalog"
+-- (SPEC-catalog.md), so SET NULL would let deleting a user silently convert
+-- every one of their PRIVATE instruments into PUBLIC ones -- see the doc
+-- comment on `Instrument.ownerUserId` in schema.prisma for the full argument,
+-- including why the specialization tables' denormalised owner_user_id copy
+-- makes this worse than a plain privacy flip.
+ALTER TABLE "instrument" ADD CONSTRAINT "instrument_owner_user_id_fkey" FOREIGN KEY ("owner_user_id") REFERENCES "user"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "instrument" ADD CONSTRAINT "instrument_currency_code_fkey" FOREIGN KEY ("currency_code") REFERENCES "currency"("code") ON DELETE RESTRICT ON UPDATE CASCADE;
@@ -111,9 +128,9 @@ ALTER TABLE "instrument" ADD CONSTRAINT "instrument_currency_code_fkey" FOREIGN 
 -- AddForeignKey
 ALTER TABLE "instrument" ADD CONSTRAINT "instrument_data_source_id_fkey" FOREIGN KEY ("data_source_id") REFERENCES "data_source"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
--- Hand-authored: FK to the hand-authored instrument_type lookup table above.
--- Not schema.prisma-generated because instrument_type is deliberately not a
--- Prisma model (see the header comment on the `Instrument` model).
+-- AddForeignKey
+-- instrument_type is now a Prisma model (fix round 1, F13.2), so this FK is
+-- exactly what `prisma migrate dev --create-only` would emit for it.
 ALTER TABLE "instrument" ADD CONSTRAINT "instrument_instrument_type_fkey" FOREIGN KEY ("instrument_type") REFERENCES "instrument_type"("code") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey

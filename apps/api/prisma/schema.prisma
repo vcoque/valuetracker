@@ -304,17 +304,41 @@ model Portfolio {
 // One base `Instrument` row and exactly one specialization row
 // (`InstrumentEquity` / `InstrumentEtf` / `InstrumentFixedIncome` /
 // `InstrumentCrypto`), matching `instrumentType`. Prisma expresses the base
-// table, the four specializations and their plain 1:1 foreign keys; it cannot
-// express "exactly one, matching the discriminator" or a partial unique
-// index. Those live as hand-authored SQL in this migration -- see
+// table, the four specializations, their plain 1:1 foreign keys, and the
+// `instrument_type` lookup table itself; it cannot express "exactly one,
+// matching the discriminator" or a partial unique index. Those live as
+// hand-authored SQL in this migration -- see
 // `migrations/*_add_instrument_hierarchy/migration.sql` and the ADR for the
 // exact DDL and why each piece cannot be expressed here.
 //
-// `instrument_type` (the discriminator lookup table) is deliberately NOT a
-// Prisma model: it is pure hand-authored SQL (`CREATE TABLE` + seed
-// `INSERT`s), so registering a fifth asset class is a data change, never a
-// `prisma migrate dev` against this schema.
+// `InstrumentType` IS a Prisma model (fix round 1, F13.2) even though it is
+// little more than a seeded lookup table: leaving it unmodelled meant every
+// unrelated future `prisma migrate dev` run would propose dropping it, since
+// Prisma's schema diff has no way to know a table it doesn't track is
+// supposed to exist. Modelling it costs nothing -- registering a fifth asset
+// class is still a data-only `INSERT` (`instrumentType.create`), never a
+// migration -- and it removes that footgun. Its seed rows are still
+// hand-authored `INSERT`s in the migration (Prisma has no schema-language way
+// to seed data at migrate time), and `prisma/seed.ts` populates it the same
+// way for every later `migrate reset`.
 // -----------------------------------------------------------------------------
+
+/// The discriminator lookup table for the `Instrument` hierarchy -- see the
+/// header comment above. Adding a fifth asset class is one row here plus one
+/// new specialization table, never a change to an existing table
+/// (SPEC-catalog.md "Adding a new asset class").
+model InstrumentType {
+  /// EQUITY, ETF, FIXED_INCOME, CRYPTO today. `VarChar(24)` to match
+  /// `Instrument.instrumentType`'s column type exactly -- Prisma rejects a
+  /// relation across mismatched native column types.
+  code String @id @db.VarChar(24)
+
+  /// Back-reference for `instrument.instrument_type`. Virtual only -- no
+  /// column on `instrument_type`.
+  instruments Instrument[]
+
+  @@map("instrument_type")
+}
 
 /// The security -- base of the class-table hierarchy. Exactly one
 /// specialization row must exist for each row here, matching
@@ -326,12 +350,25 @@ model Instrument {
   /// Surrogate key. Defaulted in the database so a plain SQL insert needs no id.
   id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
 
-  /// Discriminator: EQUITY, ETF, FIXED_INCOME, CRYPTO. FK to the
-  /// hand-authored `instrument_type` lookup table (not a Prisma relation --
-  /// see the header comment above).
+  /// Discriminator: EQUITY, ETF, FIXED_INCOME, CRYPTO. FK to
+  /// `instrument_type.code` (`instrumentTypeRef` below).
   instrumentType String @map("instrument_type") @db.VarChar(24)
 
   /// Null = public catalog; non-null = private to that user.
+  ///
+  /// `onDelete: Restrict` (fix round 1, F13.1) is deliberate and load-bearing,
+  /// not Prisma's default for an optional relation (`SetNull`). `owner_user_id
+  /// IS NULL` means "public" (SPEC-catalog.md), so `SetNull` would let
+  /// deleting a user silently flip every one of their PRIVATE instruments --
+  /// fixed-income rows included, with `issuer_name`/`issuer_tax_id`/
+  /// `contracted_rate` etc. -- into PUBLIC ones. Worse, the specialization
+  /// tables' denormalised `owner_user_id` copy (see {@link InstrumentEquity})
+  /// only re-syncs on its OWN insert/update, never in response to a base-row
+  /// `UPDATE`, so a `SetNull` would leave that copy stale (non-null) and
+  /// therefore invisible to the public-uniqueness partial index -- one
+  /// deletion producing both an exposure and a silent uniqueness hole. Every
+  /// other FK to `user.id` in this file is already `Restrict`; this was the
+  /// one place Prisma's default differed from the codebase's convention.
   ownerUserId String? @map("owner_user_id") @db.Uuid
 
   name String @db.VarChar(255)
@@ -355,9 +392,10 @@ model Instrument {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  owner      User?       @relation(fields: [ownerUserId], references: [id])
-  currency   Currency    @relation(fields: [currencyCode], references: [code])
-  dataSource DataSource? @relation(fields: [dataSourceId], references: [id])
+  owner             User?           @relation(fields: [ownerUserId], references: [id], onDelete: Restrict)
+  currency          Currency        @relation(fields: [currencyCode], references: [code])
+  dataSource        DataSource?     @relation(fields: [dataSourceId], references: [id])
+  instrumentTypeRef InstrumentType  @relation(fields: [instrumentType], references: [code])
 
   equity      InstrumentEquity?
   etf         InstrumentEtf?

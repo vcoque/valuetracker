@@ -1,5 +1,6 @@
 // Reference-data seed for the `catalog` module: ISO 4217 currencies, the B3
-// trading venue, and one price data source.
+// trading venue, one price data source, and the instrument_type discriminator
+// lookup table (Task 13; docs/adr/0005-instrument-inheritance.md).
 //
 // Wired for Prisma 7 through `migrations.seed` in ../prisma.config.ts, which
 // runs it as `node --disable-warning=... prisma/seed.ts`. Node 24 strips the
@@ -43,12 +44,31 @@ const DATA_SOURCES = [
   },
 ] as const;
 
+// The instrument class-table hierarchy's discriminator (Task 13). Fixed here,
+// not a client-editable list: registering a fifth asset class means adding a
+// row here and a new specialization table, never touching `instrument`
+// itself (SPEC-catalog.md "Adding a new asset class").
+const INSTRUMENT_TYPES = [
+  { code: 'EQUITY' },
+  { code: 'ETF' },
+  { code: 'FIXED_INCOME' },
+  { code: 'CRYPTO' },
+] as const;
+
 export async function seedReferenceData(prisma: PrismaClient): Promise<void> {
   for (const currency of CURRENCIES) {
     await prisma.currency.upsert({
       where: { code: currency.code },
       update: currency,
       create: currency,
+    });
+  }
+
+  for (const instrumentType of INSTRUMENT_TYPES) {
+    await prisma.instrumentType.upsert({
+      where: { code: instrumentType.code },
+      update: {},
+      create: instrumentType,
     });
   }
 
@@ -86,7 +106,9 @@ async function main(): Promise<void> {
 
   try {
     await seedReferenceData(prisma);
-    console.log('Seed complete: 3 currencies, 1 exchange, 1 data source.');
+    console.log(
+      'Seed complete: 3 currencies, 1 exchange, 1 data source, 4 instrument types.',
+    );
   } finally {
     await prisma.$disconnect();
   }
