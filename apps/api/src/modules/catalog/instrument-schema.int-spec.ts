@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { Test, type TestingModule } from '@nestjs/testing';
 
+import { seedReferenceData } from '../../../prisma/seed';
 import { checkViolation, foreignKeyViolation, uniqueViolation } from '../../../test/pg-error';
 import { PrismaModule } from '../../shared/prisma/prisma.module';
 import { PrismaService } from '../../shared/prisma/prisma.service';
@@ -41,26 +42,14 @@ describe('instrument schema (integration)', () => {
     prisma = moduleRef.get(PrismaService);
 
     // TRUNCATE (test/integration-setup.ts) wipes every table before each
-    // test, `instrument_type` included -- it is a hand-authored lookup table
-    // with no Prisma model, so nothing re-seeds it automatically the way a
-    // migration-time INSERT only runs once. Re-create the fixtures every
-    // test, the same way the identity/portfolio schema suites re-create
-    // `currency`.
-    await prisma.$executeRawUnsafe(
-      `INSERT INTO "instrument_type" ("code") VALUES ('EQUITY'), ('ETF'), ('FIXED_INCOME'), ('CRYPTO')`,
-    );
-    await prisma.currency.create({
-      data: { code: currencyCode, name: 'Brazilian Real', symbol: 'R$', minorUnit: 2 },
-    });
-    await prisma.exchange.create({
-      data: {
-        code: exchangeCode,
-        name: 'B3 S.A.',
-        countryCode: 'BR',
-        currencyCode,
-        timezone: 'America/Sao_Paulo',
-      },
-    });
+    // test, `instrument_type` included. `seedReferenceData` is the one
+    // function every future test that needs a currency/exchange/instrument
+    // type already calls (`reference-data.int-spec.ts`); using it here rather
+    // than a bespoke raw-SQL re-seed (fix round 1, F13.4) means Task 14/15's
+    // test files inherit the same fixture setup instead of rediscovering it.
+    // It seeds 'BRL' and 'B3' among others, matching `currencyCode` /
+    // `exchangeCode` below.
+    await seedReferenceData(prisma);
   });
 
   afterEach(async () => {
@@ -113,14 +102,25 @@ describe('instrument schema (integration)', () => {
 
   async function insertEquity(
     tx: RawExecutor,
-    args: { instrumentId: string; ticker: string; exchangeCode?: string },
+    args: {
+      instrumentId: string;
+      ticker: string;
+      exchangeCode?: string;
+      /**
+       * Deliberately settable so F13.3's test can prove the sync trigger
+       * CLOBBERS an explicitly supplied value rather than merely filling a
+       * gap left by omitting the column.
+       */
+      ownerUserId?: string;
+    },
   ): Promise<void> {
     await tx.$executeRawUnsafe(
-      `INSERT INTO "instrument_equity" ("instrument_id", "ticker", "exchange_code")
-       VALUES ($1, $2, $3)`,
+      `INSERT INTO "instrument_equity" ("instrument_id", "ticker", "exchange_code", "owner_user_id")
+       VALUES ($1, $2, $3, $4)`,
       args.instrumentId,
       args.ticker,
       args.exchangeCode ?? exchangeCode,
+      args.ownerUserId ?? null,
     );
   }
 
@@ -299,6 +299,48 @@ describe('instrument schema (integration)', () => {
 
       await expect(attempt).rejects.toMatchObject(uniqueViolation);
     });
+
+    // F13.3: the sync trigger's `SELECT ... INTO NEW.owner_user_id` is
+    // unconditional -- it must CLOBBER a value the client explicitly
+    // supplied, not just fill a gap left by omitting the column. If it only
+    // filled gaps, a caller could smuggle an arbitrary owner_user_id straight
+    // onto the specialization row and evade the partial index's
+    // `WHERE owner_user_id IS NULL` predicate, defeating public-uniqueness
+    // entirely.
+    it('the owner_user_id sync trigger clobbers an explicitly supplied value, not just a gap', async () => {
+      const idPublic = randomUUID();
+      const smuggledOwnerId = randomUUID();
+
+      await prisma.$transaction(async (tx) => {
+        // Public base row (owner_user_id IS NULL) ...
+        await insertBase(tx, { id: idPublic, type: 'EQUITY', ownerUserId: null });
+        // ... but the specialization INSERT explicitly supplies a non-null
+        // owner_user_id, as if trying to evade the partial index.
+        await insertEquity(tx, {
+          instrumentId: idPublic,
+          ticker: 'CLOBBER4',
+          ownerUserId: smuggledOwnerId,
+        });
+      });
+
+      const stored = await prisma.instrumentEquity.findUniqueOrThrow({
+        where: { instrumentId: idPublic },
+      });
+      // (a) the trigger overwrote the supplied value with the base row's
+      // real (null) owner_user_id.
+      expect(stored.ownerUserId).toBeNull();
+
+      // (b) so the row is genuinely public, and a second public row with the
+      // same natural key is still rejected -- the partial index was never
+      // bypassed.
+      const idSecondPublic = randomUUID();
+      const attempt = prisma.$transaction(async (tx) => {
+        await insertBase(tx, { id: idSecondPublic, type: 'EQUITY', ownerUserId: null });
+        await insertEquity(tx, { instrumentId: idSecondPublic, ticker: 'CLOBBER4' });
+      });
+
+      await expect(attempt).rejects.toMatchObject(uniqueViolation);
+    });
   });
 
   // --- Case 5: is_variable_income CHECK ---------------------------------------
@@ -397,5 +439,53 @@ describe('instrument schema (integration)', () => {
       issuerName: 'Tesouro Nacional',
       indexationType: 'IPCA',
     });
+  });
+
+  // --- F13.1 (fix round 1): owner deletion must not silently publicize a private instrument ---
+
+  it('rejects deleting a user who owns a private instrument (owner_user_id FK, ON DELETE RESTRICT, 23503)', async () => {
+    const owner = await createUser('owner@example.com');
+
+    const instrument = await prisma.instrument.create({
+      data: {
+        instrumentType: 'FIXED_INCOME',
+        name: 'Private CDB',
+        currencyCode,
+        status: 'ACTIVE',
+        isVariableIncome: false,
+        ownerUserId: owner.id,
+        fixedIncome: {
+          create: {
+            issuerName: 'Banco X',
+            indexationType: 'CDI',
+            issueDate: new Date('2024-01-01'),
+            maturityDate: new Date('2026-01-01'),
+            couponFrequency: 'NONE',
+            dayCountConvention: 'BUS252',
+            allowsEarlyRedemption: true,
+          },
+        },
+      },
+    });
+
+    // Prisma's default for an optional relation is ON DELETE SET NULL, which
+    // here would silently convert this PRIVATE instrument into a PUBLIC one
+    // (owner_user_id IS NULL means public -- SPEC-catalog.md). The schema
+    // overrides that default to Restrict (F13.1); this proves the override
+    // actually reached the database, not just schema.prisma.
+    //
+    // This goes through the typed `prisma.user.delete()` call, not raw SQL,
+    // so the error is Prisma's own P2003 classification (`code`/`meta` on
+    // the error directly) rather than the `driverAdapterError` shape
+    // `foreignKeyViolation` matches for raw `$executeRawUnsafe` failures.
+    const attempt = prisma.user.delete({ where: { id: owner.id } });
+
+    await expect(attempt).rejects.toMatchObject({ code: 'P2003' });
+    await expect(attempt).rejects.toThrow('instrument_owner_user_id_fkey');
+
+    const stillPrivate = await prisma.instrument.findUniqueOrThrow({
+      where: { id: instrument.id },
+    });
+    expect(stillPrivate.ownerUserId).toBe(owner.id);
   });
 });
