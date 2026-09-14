@@ -35,3 +35,19 @@ export const foreignKeyViolation = {
     },
   },
 } as const;
+
+/**
+ * SQLSTATE 23514 -- a CHECK constraint, or a hand-authored trigger's
+ * `RAISE ... USING ERRCODE = 'check_violation'`, was violated.
+ *
+ * Unlike the two shapes above, `@prisma/adapter-pg` does not classify this
+ * into a `driverAdapterError` kind: a raw `$executeRawUnsafe` that trips a
+ * CHECK surfaces as a generic "raw query failed" `PrismaClientKnownRequestError`
+ * (`P2010`) whose `.message` embeds the SQLSTATE and the server's error text
+ * as a plain string -- so, unlike the two shapes above, callers match the
+ * SQLSTATE with `expect(promise).rejects.toThrow('23514')` (a `message`
+ * substring check) alongside this `code` match, rather than a `meta` shape.
+ */
+export const checkViolation = {
+  code: 'P2010',
+} as const;
