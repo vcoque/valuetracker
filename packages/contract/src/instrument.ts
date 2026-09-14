@@ -26,18 +26,39 @@ export type InstrumentStatusContract = z.infer<typeof instrumentStatusSchema>;
 /**
  * A `Decimal`-backed field on the wire: a string, never a JSON number
  * (`SPEC.md` §Boundaries: never `number`, never `parseFloat` for money).
- * Unlike `portfolio.ts`'s `targetAmountSchema` this is not pinned to one
- * fixed number of decimal places -- `instrument`'s money columns carry
- * different scales (`expense_ratio` decimal(6,4), `contracted_rate`
- * decimal(10,6), `index_percentage` decimal(10,4), `face_value`
- * decimal(20,6)) -- so this only rejects the shapes a `Decimal.toFixed()`
- * can never produce (a leading `-` is allowed: `contracted_rate` can be a
- * negative spread).
+ * Parameterized by the backing column's actual `NUMERIC(precision, scale)`
+ * (`SPEC-catalog.md`) -- unlike `portfolio.ts`'s `targetAmountSchema`,
+ * `instrument`'s four decimal fields carry different scales
+ * (`expense_ratio` decimal(6,4), `contracted_rate` decimal(10,6),
+ * `index_percentage` decimal(10,4), `face_value` decimal(20,6)), so one
+ * fixed regex can't bound all of them.
+ *
+ * Both the integer-digit count and the decimal-place count are bounded
+ * (not just the shape a `Decimal.toFixed()` can produce): an unbounded
+ * integer part lets a client send more digits than the column holds, which
+ * reaches Postgres as `22003 numeric field overflow` -- none of the three
+ * services' Prisma-error mapping catches that code, so it previously
+ * surfaced as an unhandled 500 instead of a 400 (final-review fix). A
+ * leading `-` is always allowed: `contracted_rate` can be a negative spread.
  */
-const decimalStringSchema = z
-  .string()
-  .trim()
-  .regex(/^-?\d+(\.\d+)?$/, 'must be a decimal string');
+function decimalStringSchema(integerDigits: number, decimalPlaces: number) {
+  return z
+    .string()
+    .trim()
+    .regex(
+      new RegExp(`^-?\\d{1,${integerDigits}}(\\.\\d{1,${decimalPlaces}})?$`),
+      `must be a decimal string with at most ${integerDigits} integer digit(s) and ${decimalPlaces} decimal place(s)`,
+    );
+}
+
+/** `instrument_etf.expense_ratio decimal(6,4)` -- 2 integer digits. */
+const expenseRatioSchema = decimalStringSchema(2, 4);
+/** `instrument_fixed_income.contracted_rate decimal(10,6)` -- 4 integer digits. */
+const contractedRateSchema = decimalStringSchema(4, 6);
+/** `instrument_fixed_income.index_percentage decimal(10,4)` -- 6 integer digits. */
+const indexPercentageSchema = decimalStringSchema(6, 4);
+/** `instrument_fixed_income.face_value decimal(20,6)` -- 14 integer digits. */
+const faceValueSchema = decimalStringSchema(14, 6);
 
 /**
  * `YYYY-MM-DD` -> whether it names a real calendar date, not just a string
@@ -138,7 +159,7 @@ export const etfInstrumentResponseSchema = z.object({
   exchangeCode: z.string(),
   isin: z.string().nullable(),
   benchmarkIndex: z.string().nullable(),
-  expenseRatio: decimalStringSchema.nullable(),
+  expenseRatio: expenseRatioSchema.nullable(),
   replicationMethod: z.string().nullable(),
 });
 export type EtfInstrumentResponse = z.infer<typeof etfInstrumentResponseSchema>;
@@ -149,13 +170,13 @@ export const fixedIncomeInstrumentResponseSchema = z.object({
   issuerName: z.string(),
   issuerTaxId: z.string().nullable(),
   indexationType: z.string(),
-  contractedRate: decimalStringSchema.nullable(),
-  indexPercentage: decimalStringSchema.nullable(),
+  contractedRate: contractedRateSchema.nullable(),
+  indexPercentage: indexPercentageSchema.nullable(),
   issueDate: dateOnlySchema,
   maturityDate: dateOnlySchema,
   couponFrequency: z.string(),
   dayCountConvention: z.string(),
-  faceValue: decimalStringSchema.nullable(),
+  faceValue: faceValueSchema.nullable(),
   allowsEarlyRedemption: z.boolean(),
   taxRegime: z.string().nullable(),
 });
@@ -210,13 +231,13 @@ export const createFixedIncomeInstrumentRequestSchema = z
     issuerName: z.string().trim().min(1).max(255),
     issuerTaxId: z.string().trim().min(1).max(32).nullish(),
     indexationType: indexationTypeSchema,
-    contractedRate: decimalStringSchema.nullish(),
-    indexPercentage: decimalStringSchema.nullish(),
+    contractedRate: contractedRateSchema.nullish(),
+    indexPercentage: indexPercentageSchema.nullish(),
     issueDate: dateOnlySchema,
     maturityDate: dateOnlySchema,
     couponFrequency: couponFrequencySchema,
     dayCountConvention: z.string().trim().min(1).max(16),
-    faceValue: decimalStringSchema.nullish(),
+    faceValue: faceValueSchema.nullish(),
     allowsEarlyRedemption: z.boolean(),
     taxRegime: z.string().trim().min(1).max(24).nullish(),
   })
@@ -263,13 +284,13 @@ export const updateFixedIncomeInstrumentRequestSchema = z
     issuerName: z.string().trim().min(1).max(255),
     issuerTaxId: z.string().trim().min(1).max(32).nullable(),
     indexationType: indexationTypeSchema,
-    contractedRate: decimalStringSchema.nullable(),
-    indexPercentage: decimalStringSchema.nullable(),
+    contractedRate: contractedRateSchema.nullable(),
+    indexPercentage: indexPercentageSchema.nullable(),
     issueDate: dateOnlySchema,
     maturityDate: dateOnlySchema,
     couponFrequency: couponFrequencySchema,
     dayCountConvention: z.string().trim().min(1).max(16),
-    faceValue: decimalStringSchema.nullable(),
+    faceValue: faceValueSchema.nullable(),
     allowsEarlyRedemption: z.boolean(),
     taxRegime: z.string().trim().min(1).max(24).nullable(),
   })

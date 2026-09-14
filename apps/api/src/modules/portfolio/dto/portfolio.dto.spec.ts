@@ -77,6 +77,53 @@ describe('createPortfolioRequestSchema', () => {
       pipe.transform({ ...valid, targetAmount: '1.23456' }),
     ).toThrow(BadRequestException);
   });
+
+  // Final-review fix: `targetAmountSchema` bounded the scale (decimal places)
+  // but not the precision (integer digits), so a value with more integer
+  // digits than `NUMERIC(20,4)` holds (16) passed validation and would have
+  // reached Postgres as `22003 numeric field overflow` -- an unhandled 500,
+  // since portfolio.service.ts's Prisma-error mapping doesn't catch that
+  // code. 17 integer digits is one past the column's 16-digit capacity.
+  it('rejects a target_amount with more than 16 integer digits (precision overflow) with a 400', () => {
+    expect(() =>
+      pipe.transform({ ...valid, targetAmount: '12345678901234567' }), // 17 digits
+    ).toThrow(BadRequestException);
+  });
+
+  it('accepts a target_amount at exactly the 16-integer-digit boundary', () => {
+    const result = pipe.transform({ ...valid, targetAmount: '9999999999999999' });
+    expect(result.targetAmount).toBe('9999999999999999');
+  });
+
+  // Final-review fix, mirroring `instrument.ts`'s `dateOnlySchema` cases
+  // (F15.2, fix round 1): `targetDateSchema` only regex-checked the
+  // `YYYY-MM-DD` shape, so a well-shaped but non-existent date silently
+  // rolled over via `new Date(...)` (`"2035-02-30"` -> `"2035-03-02"`)
+  // instead of being rejected. These are the same four cases exercised for
+  // `instrument.ts`'s identical defect: invalid day-of-month, invalid
+  // month, leap-year Feb 29 accepted, non-leap Feb 29 rejected.
+  it('rejects an invalid day-of-month in targetDate ("2035-02-30") with a 400', () => {
+    expect(() =>
+      pipe.transform({ ...valid, targetDate: '2035-02-30' }),
+    ).toThrow(BadRequestException);
+  });
+
+  it('rejects an invalid month in targetDate ("2035-13-01") with a 400', () => {
+    expect(() =>
+      pipe.transform({ ...valid, targetDate: '2035-13-01' }),
+    ).toThrow(BadRequestException);
+  });
+
+  it('accepts a leap-year Feb 29 in targetDate ("2024-02-29")', () => {
+    const result = pipe.transform({ ...valid, targetDate: '2024-02-29' });
+    expect(result.targetDate).toBe('2024-02-29');
+  });
+
+  it('rejects a non-leap-year Feb 29 in targetDate ("2023-02-29") with a 400', () => {
+    expect(() =>
+      pipe.transform({ ...valid, targetDate: '2023-02-29' }),
+    ).toThrow(BadRequestException);
+  });
 });
 
 /**
@@ -120,6 +167,18 @@ describe('updatePortfolioRequestSchema', () => {
 
   it('rejects a negative target_amount', () => {
     expect(() => pipe.transform({ targetAmount: '-1' })).toThrow(
+      BadRequestException,
+    );
+  });
+
+  it('rejects a target_amount with more than 16 integer digits (precision overflow)', () => {
+    expect(() =>
+      pipe.transform({ targetAmount: '12345678901234567' }), // 17 digits
+    ).toThrow(BadRequestException);
+  });
+
+  it('rejects an invalid calendar date in targetDate ("2035-02-30")', () => {
+    expect(() => pipe.transform({ targetDate: '2035-02-30' })).toThrow(
       BadRequestException,
     );
   });

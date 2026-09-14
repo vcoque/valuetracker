@@ -78,6 +78,37 @@ describe('identity register/login (integration)', () => {
     expect(rows[0].token_hash).toBe(hashRefreshToken(issued.refreshToken));
   });
 
+  it("logout does not revoke another user's session (write query scoped by userId, fix F-final.1)", async () => {
+    const a = await identity.register(registerInput('logout-scope-a@example.com'), context);
+    const b = await identity.register(registerInput('logout-scope-b@example.com'), context);
+
+    const sessionA = await prisma.session.findFirstOrThrow({
+      where: { tokenHash: hashRefreshToken(a.refreshToken) },
+    });
+    const userB = await prisma.session.findFirstOrThrow({
+      where: { tokenHash: hashRefreshToken(b.refreshToken) },
+    });
+
+    // User B calling logout with A's sessionId must not revoke A's session --
+    // the mutating `updateMany` has to be scoped by `userId` in its `where`,
+    // not merely trust a caller-supplied sessionId (`SPEC.md` §Code Style:
+    // "scoped in the query... not optional"). Before this fix the query had
+    // no `userId` filter at all, so this call would have revoked it.
+    await identity.logout(userB.userId, sessionA.id);
+
+    const untouched = await prisma.session.findUniqueOrThrow({
+      where: { id: sessionA.id },
+    });
+    expect(untouched.revokedAt).toBeNull();
+
+    // The legitimate owner can still revoke their own session.
+    await identity.logout(sessionA.userId, sessionA.id);
+    const revoked = await prisma.session.findUniqueOrThrow({
+      where: { id: sessionA.id },
+    });
+    expect(revoked.revokedAt).not.toBeNull();
+  });
+
   it('returns a generic 409 with no email echo for a duplicate registration', async () => {
     await identity.register(registerInput('dup@example.com'), context);
 

@@ -326,10 +326,22 @@ export class IdentityService {
     };
   }
 
-  /** Revoke a single session (the caller's current one). Idempotent. */
-  async logout(sessionId: string): Promise<void> {
+  /**
+   * Revoke a single session (the caller's current one). Idempotent.
+   *
+   * `sessionId` comes from the caller's own signature-verified access token
+   * (`sid` claim), so it cannot name another user's session today -- but
+   * every user-owned query on this branch is scoped by `userId` in the
+   * `where` clause regardless (`SPEC.md` §Code Style: "not optional"), and
+   * this write was the one exception. Scoping it here matches
+   * `logoutAll` immediately below and `instrument.service.ts#update`'s
+   * F15.1 fix: a session that somehow doesn't belong to `userId` now
+   * correctly no-ops (0 rows) instead of relying on the token's own
+   * integrity as the only guard.
+   */
+  async logout(userId: string, sessionId: string): Promise<void> {
     await this.prisma.session.updateMany({
-      where: { id: sessionId, revokedAt: null },
+      where: { id: sessionId, userId, revokedAt: null },
       data: { revokedAt: new Date() },
     });
   }

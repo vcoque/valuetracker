@@ -144,10 +144,11 @@ export class IdentityController {
   @HttpCode(HttpStatus.NO_CONTENT)
   @UseGuards(AuthGuard)
   async logout(
+    @CurrentUser() userId: string,
     @CurrentUser('sessionId') sessionId: string,
     @Res({ passthrough: true }) reply: ReplyView,
   ): Promise<void> {
-    await this.identity.logout(sessionId);
+    await this.identity.logout(userId, sessionId);
     reply.header('set-cookie', serializeClearedRefreshCookie());
   }
 

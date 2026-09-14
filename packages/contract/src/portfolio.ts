@@ -20,20 +20,67 @@ const currencyCodeSchema = z
  * `target_amount` is stored as `NUMERIC(20,4)` (`SPEC.md` §Boundaries: never
  * `number`, never `parseFloat`). The pattern itself excludes a leading `-`,
  * which is what rejects a negative amount (`SPEC-portfolio.md` AC).
+ *
+ * The integer part is bounded to 16 digits (`NUMERIC(20,4)`'s precision
+ * minus its scale), not just the decimal part to 4 places: an unbounded
+ * integer part let a client send more digits than the column holds, which
+ * reached Postgres as `22003 numeric field overflow` -- `portfolio.service.ts`'s
+ * Prisma-error mapping doesn't catch that code, so it previously surfaced as
+ * an unhandled 500 instead of a 400 (final-review fix).
  */
 const targetAmountSchema = z
   .string()
   .trim()
   .regex(
-    /^\d+(\.\d{1,4})?$/,
-    'must be a non-negative decimal with up to 4 decimal places',
+    /^\d{1,16}(\.\d{1,4})?$/,
+    'must be a non-negative decimal with up to 16 integer digits and 4 decimal places',
   );
 
-/** ISO-8601 calendar date, e.g. "2035-06-30". No time component. */
+/**
+ * `YYYY-MM-DD` -> whether it names a real calendar date, not just a string
+ * matching the shape. `new Date(...)` alone cannot answer this: JS silently
+ * ROLLS OVER an out-of-range day/month rather than rejecting it (`new
+ * Date('2024-02-30')` becomes `2024-03-01`), so a naive `Date` round-trip
+ * would let a client's "2035-02-30" become a silently different persisted
+ * date rather than a 400 -- `portfolio.service.ts` is the write path that
+ * turns this schema's output into a stored `Date`. Re-deriving the UTC
+ * year/month/day from the constructed `Date` and comparing them back
+ * against the parsed input catches exactly the rollover a plain
+ * `isNaN(...)` check would miss, since a rolled-over date is still a
+ * perfectly valid `Date` object.
+ *
+ * Duplicated from `instrument.ts`'s identical `isRealCalendarDate` (this is
+ * the second field this exact defect has been found on -- fix round 1 F15.2
+ * there, this final-review fix here) rather than imported, matching this
+ * file's existing precedent of duplicating small schema pieces per-file
+ * (`currencyCodeSchema` is defined separately in `auth.ts`/`portfolio.ts`/
+ * `instrument.ts` rather than shared).
+ */
+function isRealCalendarDate(value: string): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (match === null) {
+    return false;
+  }
+  const [, yearStr, monthStr, dayStr] = match;
+  const year = Number(yearStr);
+  const month = Number(monthStr);
+  const day = Number(dayStr);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return (
+    date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+  );
+}
+
+/**
+ * ISO-8601 calendar date, e.g. "2035-06-30". No time component. Rejects both
+ * a malformed shape (the regex) and a well-shaped but non-existent date like
+ * "2035-02-30" (the refine -- see {@link isRealCalendarDate}).
+ */
 const targetDateSchema = z
   .string()
   .trim()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, 'must be a date in YYYY-MM-DD format');
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'must be a date in YYYY-MM-DD format')
+  .refine(isRealCalendarDate, { message: 'must be a real calendar date' });
 
 /**
  * `POST /portfolios` request. `objective` is free text, never enum-validated
