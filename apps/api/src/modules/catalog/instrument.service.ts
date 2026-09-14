@@ -169,14 +169,28 @@ export class InstrumentService {
 
   /**
    * `PATCH /instruments/:id`: updates a private FIXED_INCOME instrument the
-   * caller owns. Ownership (and type) is scoped IN the `findFirst` query
-   * (`{ id, ownerUserId: userId, instrumentType: 'FIXED_INCOME' }`) -- the
-   * "`findFirst` + a scoped `update`" variant of the pattern
-   * `portfolio.service.ts#update` establishes with `updateMany` (an
-   * `updateMany` cannot itself carry the nested `fixedIncome` write this
-   * needs, since `updateMany` has no relation support). Someone else's
-   * instrument, a PUBLIC one, or one that isn't FIXED_INCOME all 404 here --
-   * a caller can never reach or discover them through this endpoint.
+   * caller owns. Ownership (and type) is scoped IN THE QUERY **twice**, not
+   * just checked once and trusted afterward (`SPEC.md` §Code Style: "scoped
+   * in the query... never checked after fetching... not optional"):
+   *
+   *  1. The pre-check `findFirst({ where: { id, ownerUserId: userId,
+   *     instrumentType: 'FIXED_INCOME' } })` below -- needed to read the
+   *     CURRENT `issueDate`/`maturityDate` for the merged-date check, and to
+   *     return an early 404 before attempting a write at all.
+   *  2. The mutating `update()` itself carries the SAME three-field `where`
+   *     (Prisma's extended-where-unique: `id` alone satisfies "at least one
+   *     unique field", so `ownerUserId`/`instrumentType` ride along as real
+   *     AND-ed filters on the write's own query, not a separate check) --
+   *     fix round 1, F15.1. A `findFirst` that passes but an `update` whose
+   *     `where` was just `{ id }` would still be "checked after fetching" in
+   *     substance, even with step 1 in place.
+   *
+   * `update()` cannot use `portfolio.service.ts#update`'s `updateMany` +
+   * count-check pattern verbatim: `updateMany` has no relation support, and
+   * this write needs the nested `fixedIncome` relation write alongside the
+   * base row's. Someone else's instrument, a PUBLIC one, or one that isn't
+   * FIXED_INCOME all 404 here -- a caller can never reach or discover them
+   * through this endpoint.
    *
    * `maturityDate`/`issueDate` ordering is re-validated against the MERGED
    * (current + patch) pair, not just what the patch itself supplies: the
@@ -209,7 +223,17 @@ export class InstrumentService {
 
     try {
       await this.prisma.instrument.update({
-        where: { id },
+        // Extended-where-unique (Prisma's `Prisma.AtLeast<..., 'id' | 'id_instrumentType'>`):
+        // `id` alone satisfies "at least one unique field", so `ownerUserId`
+        // and `instrumentType` ride along as regular AND-ed filters on the
+        // SAME query Prisma sends -- this is the mutating write itself being
+        // ownership-scoped (`SPEC.md` §Code Style: "scoped in the query,
+        // never checked after fetching... not optional"), not just the
+        // `findFirst` pre-check above. If the combined filter matches no row
+        // (id gone, wrong owner, or no longer FIXED_INCOME between the
+        // `findFirst` and here), Prisma throws P2025, mapped below to the
+        // same 404 the `findFirst`-miss branch already returns.
+        where: { id, ownerUserId: userId, instrumentType: 'FIXED_INCOME' },
         data: {
           ...(patch.name !== undefined && { name: patch.name }),
           ...(patch.currencyCode !== undefined && { currencyCode: patch.currencyCode }),
@@ -247,7 +271,7 @@ export class InstrumentService {
         },
       });
     } catch (error) {
-      throw mapWriteError(error);
+      throw mapWriteError(error, id);
     }
 
     return this.findVisibleById(userId, id);
@@ -265,14 +289,22 @@ function toDecimalOrNull(value: string | null | undefined): Prisma.Decimal | nul
  * AAA..ZZZ at the wire schema, but only seeded codes exist) -- same P2003
  * mapping `portfolio.service.ts#create` uses. Anything else is a genuine
  * server error, not a client mistake, so it rethrows unchanged.
+ *
+ * `notFoundId`, when given, maps P2025 ("record not found") -- what
+ * `update`'s now ownership-+type-scoped `where` throws when nothing matches
+ * -- to the same `NotFoundException` shape `findFirst`'s miss branch already
+ * returns, so tightening that query (fix round 1, F15.1) does not change the
+ * 404 behaviour a caller sees. `create` never passes it: a bare `create` has
+ * no `where` clause to come back P2025.
  */
-function mapWriteError(error: unknown): unknown {
-  if (
-    error instanceof Prisma.PrismaClientKnownRequestError &&
-    error.code === 'P2003' &&
-    JSON.stringify(error.meta ?? {}).includes('currency_code')
-  ) {
-    return new BadRequestException({ message: UNKNOWN_CURRENCY_MESSAGE });
+function mapWriteError(error: unknown, notFoundId?: string): unknown {
+  if (error instanceof Prisma.PrismaClientKnownRequestError) {
+    if (error.code === 'P2003' && JSON.stringify(error.meta ?? {}).includes('currency_code')) {
+      return new BadRequestException({ message: UNKNOWN_CURRENCY_MESSAGE });
+    }
+    if (error.code === 'P2025' && notFoundId !== undefined) {
+      return new NotFoundException({ message: `Instrument ${notFoundId} not found` });
+    }
   }
   return error;
 }

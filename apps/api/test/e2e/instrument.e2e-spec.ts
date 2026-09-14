@@ -465,6 +465,29 @@ describe('instrument endpoints (e2e)', () => {
       expect(response.status).toBe(400);
     });
 
+    // F15.2 (fix round 1): "2024-02-30" matches dateOnlySchema's YYYY-MM-DD
+    // shape but names no real calendar day -- JS's `Date` constructor would
+    // silently roll it over to 2024-03-01 rather than reject it, so this
+    // pins that `dateOnlySchema` itself refuses the value before it ever
+    // reaches a `new Date(...)` call.
+    it('rejects a malformed calendar date ("2024-02-30") in issueDate with a 400', async () => {
+      const a = await register(`inst-post-badissuedate-${Date.now()}@example.com`);
+      const response = await request(app.getHttpServer())
+        .post('/instruments')
+        .set('Authorization', `Bearer ${a.token}`)
+        .send(validCdb({ issueDate: '2024-02-30' }));
+      expect(response.status).toBe(400);
+    });
+
+    it('rejects a malformed calendar date ("2024-02-30") in maturityDate with a 400', async () => {
+      const a = await register(`inst-post-badmaturitydate-${Date.now()}@example.com`);
+      const response = await request(app.getHttpServer())
+        .post('/instruments')
+        .set('Authorization', `Bearer ${a.token}`)
+        .send(validCdb({ maturityDate: '2024-02-30' }));
+      expect(response.status).toBe(400);
+    });
+
     it('PATCH on another user\'s instrument returns 404, and leaves it unchanged', async () => {
       const server = app.getHttpServer();
       const a = await register(`inst-patch-owner-${Date.now()}@example.com`);
@@ -527,6 +550,24 @@ describe('instrument endpoints (e2e)', () => {
         .patch(`/instruments/${id}`)
         .set('Authorization', `Bearer ${a.token}`)
         .send({ instrumentType: 'EQUITY' });
+      expect(response.status).toBe(400);
+    });
+
+    // F15.2: the same malformed-calendar-date rejection applies on PATCH --
+    // both request schemas share `dateOnlySchema`.
+    it('rejects a PATCH with a malformed calendar date ("2024-02-30") in maturityDate with a 400', async () => {
+      const server = app.getHttpServer();
+      const a = await register(`inst-patch-badmaturitydate-${Date.now()}@example.com`);
+      const createResponse = await request(server)
+        .post('/instruments')
+        .set('Authorization', `Bearer ${a.token}`)
+        .send(validCdb());
+      const id = (createResponse.body as { id: string }).id;
+
+      const response = await request(server)
+        .patch(`/instruments/${id}`)
+        .set('Authorization', `Bearer ${a.token}`)
+        .send({ maturityDate: '2024-02-30' });
       expect(response.status).toBe(400);
     });
   });

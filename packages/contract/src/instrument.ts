@@ -39,8 +39,45 @@ const decimalStringSchema = z
   .trim()
   .regex(/^-?\d+(\.\d+)?$/, 'must be a decimal string');
 
-/** ISO-8601 calendar date, e.g. "2035-06-30". No time component. */
-const dateOnlySchema = z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, 'must be a date in YYYY-MM-DD format');
+/**
+ * `YYYY-MM-DD` -> whether it names a real calendar date, not just a string
+ * matching the shape. `new Date(...)` alone cannot answer this: JS silently
+ * ROLLS OVER an out-of-range day/month rather than rejecting it (`new
+ * Date('2024-02-30')` becomes `2024-03-01`), so a naive `Date` round-trip
+ * would let a client's "2024-02-30" become a silently different persisted
+ * date rather than a 400 (fix round 1, F15.2 -- this is the first place
+ * `dateOnlySchema`'s output gets turned into a stored `Date`, on `POST`
+ * `create` and the `PATCH` merge in `instrument.service.ts`). Re-deriving
+ * the UTC year/month/day from the constructed `Date` and comparing them back
+ * against the parsed input catches exactly the rollover a plain `isNaN(...)`
+ * check would miss, since a rolled-over date is still a perfectly valid
+ * `Date` object.
+ */
+function isRealCalendarDate(value: string): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (match === null) {
+    return false;
+  }
+  const [, yearStr, monthStr, dayStr] = match;
+  const year = Number(yearStr);
+  const month = Number(monthStr);
+  const day = Number(dayStr);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return (
+    date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+  );
+}
+
+/**
+ * ISO-8601 calendar date, e.g. "2035-06-30". No time component. Rejects both
+ * a malformed shape (the regex) and a well-shaped but non-existent date like
+ * "2024-02-30" (the refine -- see {@link isRealCalendarDate}).
+ */
+const dateOnlySchema = z
+  .string()
+  .trim()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'must be a date in YYYY-MM-DD format')
+  .refine(isRealCalendarDate, { message: 'must be a real calendar date' });
 
 /** ISO 4217 alpha-3, upper-case. Existence is enforced by the database FK to `currency`. */
 const currencyCodeSchema = z
