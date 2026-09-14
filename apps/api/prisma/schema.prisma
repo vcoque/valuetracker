@@ -57,6 +57,10 @@ model Currency {
   /// (Task 11). Virtual only -- no column on `currency`.
   portfolios Portfolio[]
 
+  /// Back-reference for the `instrument.currency_code` foreign key (Task 13).
+  /// Virtual only -- no column on `currency`.
+  instruments Instrument[]
+
   @@map("currency")
 }
 
@@ -81,6 +85,14 @@ model Exchange {
 
   currency Currency @relation(fields: [currencyCode], references: [code])
 
+  /// Back-reference for `instrument_equity.exchange_code` (Task 13). Virtual
+  /// only -- no column on `exchange`.
+  instrumentEquities InstrumentEquity[]
+
+  /// Back-reference for `instrument_etf.exchange_code` (Task 13). Virtual
+  /// only -- no column on `exchange`.
+  instrumentEtfs InstrumentEtf[]
+
   @@map("exchange")
 }
 
@@ -101,6 +113,10 @@ model DataSource {
 
   /// Whether the source is currently in use.
   isActive Boolean @map("is_active")
+
+  /// Back-reference for the `instrument.data_source_id` foreign key
+  /// (Task 13). Virtual only -- no column on `data_source`.
+  instruments Instrument[]
 
   @@map("data_source")
 }
@@ -149,6 +165,10 @@ model User {
   credential   UserCredential?
   sessions     Session[]
   portfolios   Portfolio[]
+
+  /// Back-reference for the `instrument.owner_user_id` foreign key
+  /// (Task 13). Virtual only -- no column on `user`.
+  instruments Instrument[]
 
   @@map("user")
 }
@@ -274,4 +294,196 @@ model Portfolio {
   /// migration later.
   @@unique([userId, name])
   @@map("portfolio")
+}
+
+// -----------------------------------------------------------------------------
+// Instrument class-table hierarchy (Task 13; SPEC-catalog.md, ARCHITECTURE.md
+// §7; the mechanism is settled by docs/adr/0005-instrument-inheritance.md,
+// a GO decision from the Task 5 spike).
+//
+// One base `Instrument` row and exactly one specialization row
+// (`InstrumentEquity` / `InstrumentEtf` / `InstrumentFixedIncome` /
+// `InstrumentCrypto`), matching `instrumentType`. Prisma expresses the base
+// table, the four specializations and their plain 1:1 foreign keys; it cannot
+// express "exactly one, matching the discriminator" or a partial unique
+// index. Those live as hand-authored SQL in this migration -- see
+// `migrations/*_add_instrument_hierarchy/migration.sql` and the ADR for the
+// exact DDL and why each piece cannot be expressed here.
+//
+// `instrument_type` (the discriminator lookup table) is deliberately NOT a
+// Prisma model: it is pure hand-authored SQL (`CREATE TABLE` + seed
+// `INSERT`s), so registering a fifth asset class is a data change, never a
+// `prisma migrate dev` against this schema.
+// -----------------------------------------------------------------------------
+
+/// The security -- base of the class-table hierarchy. Exactly one
+/// specialization row must exist for each row here, matching
+/// `instrumentType`; enforced by a deferred constraint trigger
+/// (`instrument_one_specialization`) and, for the "wrong type" half, by the
+/// composite `(id, instrument_type)` foreign key each specialization
+/// re-declares against `instrument_id_type_uk` below.
+model Instrument {
+  /// Surrogate key. Defaulted in the database so a plain SQL insert needs no id.
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  /// Discriminator: EQUITY, ETF, FIXED_INCOME, CRYPTO. FK to the
+  /// hand-authored `instrument_type` lookup table (not a Prisma relation --
+  /// see the header comment above).
+  instrumentType String @map("instrument_type") @db.VarChar(24)
+
+  /// Null = public catalog; non-null = private to that user.
+  ownerUserId String? @map("owner_user_id") @db.Uuid
+
+  name String @db.VarChar(255)
+
+  /// Denomination. Foreign key to `currency.code`.
+  currencyCode String @map("currency_code") @db.Char(3)
+
+  /// Null when the instrument is maintained by hand rather than ingested.
+  dataSourceId String? @map("data_source_id") @db.Uuid
+
+  /// ACTIVE, DELISTED, MATURED, SUSPENDED (Ruling S6 -- the 4-value set from
+  /// the entity dictionary, not the 3-value diagram caption in SPEC-catalog.md).
+  status String @db.VarChar(16)
+
+  /// True for equity/ETF/crypto, false for fixed income. Derived, never
+  /// trusted from a client: enforced by the hand-authored
+  /// `instrument_is_variable_income_chk` CHECK, not merely validated in
+  /// application code (SPEC-catalog.md AC).
+  isVariableIncome Boolean @map("is_variable_income")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  owner      User?       @relation(fields: [ownerUserId], references: [id])
+  currency   Currency    @relation(fields: [currencyCode], references: [code])
+  dataSource DataSource? @relation(fields: [dataSourceId], references: [id])
+
+  equity      InstrumentEquity?
+  etf         InstrumentEtf?
+  fixedIncome InstrumentFixedIncome?
+  crypto      InstrumentCrypto?
+
+  /// Target of the composite FK each specialization re-declares
+  /// (`instrument_<type>_matches_base`, hand-authored): a specialization row
+  /// cannot claim a type its base row does not have.
+  @@unique([id, instrumentType], map: "instrument_id_type_uk")
+  @@map("instrument")
+}
+
+/// The EQUITY specialization. `instrumentType` and `ownerUserId` are
+/// denormalised onto this table, not user-settable: a hand-authored CHECK
+/// pins `instrumentType` to 'EQUITY', and a hand-authored `BEFORE
+/// INSERT/UPDATE` trigger copies `ownerUserId` from the base row -- which is
+/// what the partial unique index on (`exchange_code`, `ticker`) needs, since
+/// its predicate column lives here but its source of truth lives on
+/// `instrument`.
+model InstrumentEquity {
+  /// Shared primary key: also the foreign key to `instrument.id`.
+  instrumentId String @id @map("instrument_id") @db.Uuid
+
+  /// Pinned to 'EQUITY' by a hand-authored CHECK; see the migration.
+  instrumentType String @default("EQUITY") @map("instrument_type") @db.VarChar(24)
+
+  /// Trigger-maintained copy of `instrument.owner_user_id`; see the model doc.
+  ownerUserId String? @map("owner_user_id") @db.Uuid
+
+  ticker       String  @db.VarChar(16)
+  exchangeCode String  @map("exchange_code") @db.VarChar(16)
+  isin         String? @db.Char(12)
+  sector       String? @db.VarChar(64)
+  countryCode  String? @map("country_code") @db.Char(2)
+
+  instrument Instrument @relation(fields: [instrumentId], references: [id], onDelete: Cascade)
+  exchange   Exchange   @relation(fields: [exchangeCode], references: [code])
+
+  /// Public natural key `(exchange_code, ticker)`, unique only among public
+  /// rows (`owner_user_id IS NULL`) -- a hand-authored partial unique index,
+  /// since Prisma cannot express one; see the migration.
+  @@map("instrument_equity")
+}
+
+/// The ETF specialization. Kept separate from `InstrumentEquity` because an
+/// ETF's economics are described by its benchmark and expense ratio, not a
+/// sector and issuer domicile (SPEC-catalog.md). Same denormalisation
+/// pattern as {@link InstrumentEquity}: see its doc comment.
+model InstrumentEtf {
+  instrumentId   String  @id @map("instrument_id") @db.Uuid
+  instrumentType String  @default("ETF") @map("instrument_type") @db.VarChar(24)
+  ownerUserId    String? @map("owner_user_id") @db.Uuid
+
+  ticker       String  @db.VarChar(16)
+  exchangeCode String  @map("exchange_code") @db.VarChar(16)
+  isin         String? @db.Char(12)
+  benchmarkIndex String? @map("benchmark_index") @db.VarChar(64)
+  /// Annual, as a fraction.
+  expenseRatio Decimal? @map("expense_ratio") @db.Decimal(6, 4)
+  /// PHYSICAL, SYNTHETIC.
+  replicationMethod String? @map("replication_method") @db.VarChar(16)
+
+  instrument Instrument @relation(fields: [instrumentId], references: [id], onDelete: Cascade)
+  exchange   Exchange   @relation(fields: [exchangeCode], references: [code])
+
+  /// Public natural key `(exchange_code, ticker)` -- its own partial unique
+  /// index, not shared with `instrument_equity`'s. Hand-authored; see the
+  /// migration.
+  @@map("instrument_etf")
+}
+
+/// The FIXED_INCOME specialization -- bonds, CDBs, treasury notes. No public
+/// natural-key uniqueness: fixed income has no natural public key in this
+/// spec (SPEC-catalog.md), so this table carries no partial unique index.
+model InstrumentFixedIncome {
+  instrumentId   String  @id @map("instrument_id") @db.Uuid
+  instrumentType String  @default("FIXED_INCOME") @map("instrument_type") @db.VarChar(24)
+  ownerUserId    String? @map("owner_user_id") @db.Uuid
+
+  /// Bank or government.
+  issuerName String @map("issuer_name") @db.VarChar(255)
+  /// CNPJ or equivalent.
+  issuerTaxId String? @map("issuer_tax_id") @db.VarChar(32)
+  /// PRE, CDI, IPCA, SELIC.
+  indexationType String @map("indexation_type") @db.VarChar(16)
+  /// Annual rate -- the fixed part, or the spread over an index.
+  contractedRate Decimal? @map("contracted_rate") @db.Decimal(10, 6)
+  /// e.g. 110 for 110% of CDI.
+  indexPercentage Decimal? @map("index_percentage") @db.Decimal(10, 4)
+  issueDate    DateTime @map("issue_date") @db.Date
+  maturityDate DateTime @map("maturity_date") @db.Date
+  /// NONE, MONTHLY, SEMIANNUAL, ANNUAL.
+  couponFrequency String @map("coupon_frequency") @db.VarChar(16)
+  /// e.g. BUS252, ACT360.
+  dayCountConvention String @map("day_count_convention") @db.VarChar(16)
+  /// Nominal at maturity.
+  faceValue Decimal? @map("face_value") @db.Decimal(20, 6)
+  /// Daily liquidity or not.
+  allowsEarlyRedemption Boolean @map("allows_early_redemption")
+  /// e.g. REGRESSIVE_IR, EXEMPT.
+  taxRegime String? @map("tax_regime") @db.VarChar(24)
+
+  instrument Instrument @relation(fields: [instrumentId], references: [id], onDelete: Cascade)
+
+  @@map("instrument_fixed_income")
+}
+
+/// The CRYPTO specialization. Same denormalisation pattern as
+/// {@link InstrumentEquity}: see its doc comment.
+model InstrumentCrypto {
+  instrumentId   String  @id @map("instrument_id") @db.Uuid
+  instrumentType String  @default("CRYPTO") @map("instrument_type") @db.VarChar(24)
+  ownerUserId    String? @map("owner_user_id") @db.Uuid
+
+  symbol          String  @db.VarChar(16)
+  /// e.g. BITCOIN, ETHEREUM.
+  network         String? @db.VarChar(32)
+  /// For tokens.
+  contractAddress String? @map("contract_address") @db.VarChar(128)
+  /// Divisibility, e.g. 8 for BTC.
+  decimals        Int
+
+  instrument Instrument @relation(fields: [instrumentId], references: [id], onDelete: Cascade)
+
+  /// Public natural key `(symbol, network)`, unique only among public rows.
+  /// Hand-authored partial unique index; see the migration.
+  @@map("instrument_crypto")
 }
