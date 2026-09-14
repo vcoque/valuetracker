@@ -198,6 +198,15 @@ migration that does not replay is caught by the integration suite.
   `owner_user_id` if an instrument can ever change ownership; `SPEC-catalog.md`
   has no such transition today, so a `BEFORE UPDATE` on the base propagating the
   change is a future item, not a Task 13 blocker.
+  - **Resolved (final-review Ruling S14, won't-build-until-needed):** this
+    deferred item was carried forward to Task 15 without ever being scheduled
+    or built. The final whole-branch review confirmed no endpoint on this
+    branch can change `owner_user_id` after creation — `POST`/`PATCH
+    /instruments`'s request schemas are `.strict()` and simply don't accept
+    that field (`SPEC-catalog.md` §Structural invariants owned here) — so a
+    propagation trigger would guard a mutation path that doesn't exist. It
+    was deliberately **not** built. Revisit only if a future task adds an
+    ownership-transfer capability; add the trigger at that time, not before.
 - Deferred-constraint failures surface through Prisma at `COMMIT` as the bare
   `RAISE` message (no SQLSTATE). Code that needs to branch on "exactly one"
   violations should `SET CONSTRAINTS ALL IMMEDIATE` before commit, or match on

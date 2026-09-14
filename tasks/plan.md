@@ -9,7 +9,8 @@ fixed-income instrument, and read both back — with a second user provably unab
 to see any of it.
 
 This plan covers **backend only**. `ledger`, `market-data`, `valuation` and
-`reporting` are not specified yet and are out of scope here.
+`reporting` are out of scope for this plan (each now has its own `SPEC-*.md`,
+but none is implemented here).
 
 Tasks are recorded in [`tasks/todo.md`](./todo.md).
 

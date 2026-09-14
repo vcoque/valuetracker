@@ -241,6 +241,15 @@ Constraints: **UK** (`symbol`, `network`) for public instruments.
 - Public uniqueness — `(exchange_code, ticker)` and `(symbol, network)` — applies
   only to rows with `owner_user_id IS NULL`, so two users may each hold a private
   instrument carrying the same identifiers. This requires a partial unique index.
+- **`owner_user_id` is immutable after creation — no API path changes it.**
+  Both `POST /instruments` and `PATCH /instruments/:id` request schemas are
+  `.strict()` and do not accept `ownerUserId` at all (see §API Surface).
+  ADR 0005's Consequences section flagged a base-to-specialization
+  `owner_user_id` propagation trigger as a future item if ownership transfer
+  is ever added; it was deliberately not built (final-review Ruling S14) —
+  there is no mutation path for it to guard. If a future task adds an
+  ownership-transfer capability, that trigger must be added *at that time*,
+  not before.
 
 ### The inheritance mapping is the hard part
 
