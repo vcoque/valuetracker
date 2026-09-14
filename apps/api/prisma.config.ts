@@ -9,7 +9,9 @@
 // `env()` is Prisma's own accessor rather than a bare process.env read: it
 // throws a named PrismaConfigEnvError when the variable is missing, so a
 // mis-set environment fails as "DATABASE_URL is not set" instead of as a
-// connection attempt to `undefined`.
+// connection attempt to `undefined`. `datasourceUrl()` below catches that one
+// throw for the `generate`/no-database case -- see its own doc comment for
+// the full behavior of each Prisma CLI command when the variable is unset.
 
 import { defineConfig, env } from 'prisma/config';
 
