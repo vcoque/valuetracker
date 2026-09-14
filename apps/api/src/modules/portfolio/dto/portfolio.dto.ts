@@ -11,4 +11,6 @@ export {
   portfolioResponseSchema,
   type PortfoliosResponse,
   portfoliosResponseSchema,
+  type UpdatePortfolioRequest,
+  updatePortfolioRequestSchema,
 } from '@valuetracker/contract';

@@ -6,7 +6,9 @@ import {
   HttpStatus,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 
@@ -17,14 +19,16 @@ import {
   type CreatePortfolioRequest,
   createPortfolioRequestSchema,
   type PortfolioResponse,
+  type UpdatePortfolioRequest,
+  updatePortfolioRequestSchema,
 } from './dto/portfolio.dto';
 import { PortfolioService } from './portfolio.service';
 
 /**
- * `SPEC-portfolio.md` §API Surface: create, list and get. `PATCH` and
- * archive/unarchive are Task 12. Every route is authenticated, and every
- * read/write is scoped to the caller's own rows in the query -- never checked
- * after fetching.
+ * `SPEC-portfolio.md` §API Surface: create, list, get, update, archive and
+ * unarchive. There is deliberately no `DELETE` -- archive is the only removal
+ * path. Every route is authenticated, and every read/write is scoped to the
+ * caller's own rows in the query -- never checked after fetching.
  */
 @Controller('portfolios')
 @UseGuards(AuthGuard)
@@ -42,8 +46,14 @@ export class PortfolioController {
   }
 
   @Get()
-  list(@CurrentUser() userId: string): Promise<PortfolioResponse[]> {
-    return this.portfolios.listActive(userId);
+  list(
+    @CurrentUser() userId: string,
+    // A bare `?includeArchived=true` flag, not a zod-validated body -- any
+    // other value (missing, "false", "1", ...) means "active only", which is
+    // the safe default (`SPEC-portfolio.md`: default list excludes archived).
+    @Query('includeArchived') includeArchived?: string,
+  ): Promise<PortfolioResponse[]> {
+    return this.portfolios.list(userId, includeArchived === 'true');
   }
 
   @Get(':id')
@@ -56,5 +66,33 @@ export class PortfolioController {
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<PortfolioResponse> {
     return this.portfolios.findOwnedById(userId, id);
+  }
+
+  @Patch(':id')
+  update(
+    @CurrentUser() userId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(updatePortfolioRequestSchema))
+    body: UpdatePortfolioRequest,
+  ): Promise<PortfolioResponse> {
+    return this.portfolios.update(userId, id, body);
+  }
+
+  @Post(':id/archive')
+  @HttpCode(HttpStatus.OK)
+  archive(
+    @CurrentUser() userId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<PortfolioResponse> {
+    return this.portfolios.archive(userId, id);
+  }
+
+  @Post(':id/unarchive')
+  @HttpCode(HttpStatus.OK)
+  unarchive(
+    @CurrentUser() userId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<PortfolioResponse> {
+    return this.portfolios.unarchive(userId, id);
   }
 }

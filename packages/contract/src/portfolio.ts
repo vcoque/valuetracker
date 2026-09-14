@@ -61,6 +61,38 @@ export type CreatePortfolioRequestInput = z.input<typeof createPortfolioRequestS
  * is validated as one on the way in; `createdAt` is an ISO-8601 string and
  * `targetDate`, when present, is a bare `YYYY-MM-DD` date.
  */
+/**
+ * `PATCH /portfolios/:id` request (`SPEC-portfolio.md` §API Surface: "Update
+ * `name`, `description`, `objective`, `target_amount`, `target_date`").
+ * `baseCurrencyCode` and `userId` are simply not fields of this schema, and
+ * `.strict()` turns any attempt to send them (or any other unknown key) into
+ * a 400 naming the offending key -- the same mechanism `updateMeRequestSchema`
+ * (`auth.ts`) uses to keep `email`/`id` off `PATCH /auth/me`. `SPEC-portfolio.md`
+ * §Constraints: `base_currency_code` is immutable because changing it would
+ * silently redenominate `target_amount` and invalidate every stored snapshot.
+ *
+ * Each present field is nullable (clears the column) but the field itself is
+ * optional (`.partial()`): omit a key to leave it unchanged, send it as
+ * `null` to clear it, send a value to set it. At least one key must be
+ * present, so an empty patch is rejected rather than a silent no-op.
+ */
+export const updatePortfolioRequestSchema = z
+  .object({
+    name: z.string().trim().min(1).max(128),
+    description: z.string().trim().min(1).max(512).nullable(),
+    objective: z.string().trim().min(1).max(255).nullable(),
+    targetAmount: targetAmountSchema.nullable(),
+    targetDate: targetDateSchema.nullable(),
+  })
+  .partial()
+  .strict()
+  .refine((patch) => Object.values(patch).some((value) => value !== undefined), {
+    message:
+      'at least one of name, description, objective, targetAmount, targetDate is required',
+  });
+export type UpdatePortfolioRequest = z.infer<typeof updatePortfolioRequestSchema>;
+export type UpdatePortfolioRequestInput = z.input<typeof updatePortfolioRequestSchema>;
+
 export const portfolioResponseSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),

@@ -1,7 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 
 import { ZodValidationPipe } from '../../../shared/http/zod-validation.pipe';
-import { createPortfolioRequestSchema } from './portfolio.dto';
+import { createPortfolioRequestSchema, updatePortfolioRequestSchema } from './portfolio.dto';
 
 /**
  * The pipe wired onto `POST /portfolios`. `SPEC-portfolio.md` AC:
@@ -76,5 +76,51 @@ describe('createPortfolioRequestSchema', () => {
     expect(() =>
       pipe.transform({ ...valid, targetAmount: '1.23456' }),
     ).toThrow(BadRequestException);
+  });
+});
+
+/**
+ * The pipe wired onto `PATCH /portfolios/:id`. `SPEC-portfolio.md` AC:
+ * "PATCH rejects any attempt to change base_currency_code or user_id, with a
+ * clear error naming the reason" -- here, `.strict()` on a schema that never
+ * declares those two fields turns either into a 400 naming the offending key,
+ * before the request reaches the service (`updatePortfolioRequestSchema`
+ * doc comment in `@valuetracker/contract`).
+ */
+describe('updatePortfolioRequestSchema', () => {
+  const pipe = new ZodValidationPipe(updatePortfolioRequestSchema);
+
+  it('accepts a partial patch of the mutable fields', () => {
+    const result = pipe.transform({ name: 'New Name' });
+
+    expect(result).toEqual({ name: 'New Name' });
+  });
+
+  it('accepts null to clear a nullable field', () => {
+    const result = pipe.transform({ description: null });
+
+    expect(result).toEqual({ description: null });
+  });
+
+  it('rejects an attempt to change base_currency_code (400, unrecognized key)', () => {
+    expect(() =>
+      pipe.transform({ name: 'New Name', baseCurrencyCode: 'USD' }),
+    ).toThrow(BadRequestException);
+  });
+
+  it('rejects an attempt to change user_id (400, unrecognized key)', () => {
+    expect(() =>
+      pipe.transform({ name: 'New Name', userId: 'some-other-user' }),
+    ).toThrow(BadRequestException);
+  });
+
+  it('rejects an empty patch -- at least one field is required', () => {
+    expect(() => pipe.transform({})).toThrow(BadRequestException);
+  });
+
+  it('rejects a negative target_amount', () => {
+    expect(() => pipe.transform({ targetAmount: '-1' })).toThrow(
+      BadRequestException,
+    );
   });
 });
