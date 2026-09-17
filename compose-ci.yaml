@@ -75,3 +75,17 @@ services:
       # the development database uses -- see its own comment on why that
       # match matters.
       POSTGRES_IMAGE: ${POSTGRES_IMAGE:?set POSTGRES_IMAGE in .env.ci}
+      # `user:` above runs this container as the runner's own uid:gid (e.g.
+      # 1001:1001 on GitHub-hosted `ubuntu-latest`) rather than the image's
+      # built-in `node` user (uid 1000, `/home/node` chowned to it in
+      # Dockerfile.dev). Whenever the runner's uid doesn't match 1000 -- true
+      # on every GitHub-hosted run -- the container has no /etc/passwd entry
+      # for it, so npm cannot resolve a home directory and falls back to
+      # caching at `/.npm`, which is root-owned: `npm ci` fails with EACCES.
+      # Pointing only npm's cache at `/tmp` (mode 1777, so any uid can create
+      # entries there) fixes exactly that, without redirecting every
+      # $HOME-reading tool in the container into a world-readable directory --
+      # a bare `HOME=/tmp` would do that, and this pipeline never has a reason
+      # to write a credential relative to $HOME, but there is no reason to
+      # widen the blast radius for tools that don't need it.
+      npm_config_cache: /tmp/.npm-cache
