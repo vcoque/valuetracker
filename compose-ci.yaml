@@ -62,6 +62,16 @@ services:
       # this is the same sibling-container pattern compose-dev.yaml uses, not
       # a CI-specific trick.
       - /var/run/docker.sock:/var/run/docker.sock
+      # A minimal passwd/group pair with an entry for whatever uid `user:`
+      # above sets, generated fresh by the workflow's "Compute per-runner
+      # values" step. Dockerfile.dev's image only has a passwd entry for its
+      # built-in `node` user (uid 1000), so getpwuid(3)-style lookups for any
+      # other uid -- e.g. Testcontainers' reaper, which calls Node's
+      # os.userInfo() -- fail with ENOENT. This is that fix: bind-mount over
+      # the image's own files rather than editing Dockerfile.dev, which stays
+      # correct for the common case (a developer whose uid matches `node`).
+      - ${CI_PASSWD_FILE:?export CI_PASSWD_FILE before invoking compose-ci.yaml}:/etc/passwd:ro
+      - ${CI_GROUP_FILE:?export CI_GROUP_FILE before invoking compose-ci.yaml}:/etc/group:ro
     extra_hosts:
       # Sibling containers publish their mapped ports on the runner host, not
       # inside this container's network namespace -- Testcontainers has to

@@ -64,6 +64,23 @@ jobs:
           echo "HOST_GID=$(id -g)" >> "$GITHUB_ENV"
           echo "DOCKER_GID=$(getent group docker | cut -d: -f3)" >> "$GITHUB_ENV"
 
+          # compose-ci.yaml runs the container as this runner's own uid:gid
+          # (see that file's comment on `user:`). Dockerfile.dev's image only
+          # has a passwd entry for its built-in `node` user (uid 1000) -- a
+          # coincidental match on most developers' machines, but never on a
+          # GitHub-hosted runner (uid 1001 on ubuntu-latest). Without a
+          # matching entry, any getpwuid(3)-style lookup for this uid fails
+          # with ENOENT: Testcontainers' reaper calls Node's os.userInfo(),
+          # which hits exactly that. A minimal, throwaway passwd/group pair
+          # bind-mounted over the image's own fixes it for whichever uid this
+          # happens to be, without touching Dockerfile.dev (which stays
+          # correct and unmodified for the common case of a developer whose
+          # uid already matches `node`).
+          printf 'root:x:0:0:root:/root:/bin/sh\nci:x:%s:%s:CI runner:/tmp:/bin/sh\n' "$(id -u)" "$(id -g)" > "$RUNNER_TEMP/ci-passwd"
+          printf 'root:x:0:\nci:x:%s:\n' "$(id -g)" > "$RUNNER_TEMP/ci-group"
+          echo "CI_PASSWD_FILE=$RUNNER_TEMP/ci-passwd" >> "$GITHUB_ENV"
+          echo "CI_GROUP_FILE=$RUNNER_TEMP/ci-group" >> "$GITHUB_ENV"
+
       - name: Build the CI toolchain image
         run: $COMPOSE_CMD build app
 
